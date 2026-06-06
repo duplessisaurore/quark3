@@ -1,0 +1,18 @@
+[package]
+name = "quark_asm"
+version = "1.0.0"
+edition = "2024"
+authors = ["The Quark3 Contributors"]
+
+description = "The Quark3 language's assembler"
+readme = "README.md"
+
+repository = "https://github.com/duplessisaurore/quark3"
+license = "AGPLv3"
+
+keywords = ["languages", "scripting", "script"]
+
+[dependencies]
+lepton3 = { workspace = true }
+quark_map = { workspace = true }
+hashbrown = { workspace = true }

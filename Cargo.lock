@@ -39,8 +39,8 @@ dependencies = [
 
 [[package]]
 name = "lepton3"
-version = "1.0.0"
-source = "git+https://github.com/duplessisaurore/lepton3#8c4fd968f100f64ced698a35d39001fe97ffd6d8"
+version = "1.1.0"
+source = "git+https://github.com/duplessisaurore/lepton3#af53d09cb9683a0cf722f413e0f25176c09f2892"
 dependencies = [
  "lepton_image",
  "lepton_opcodes",
@@ -49,8 +49,8 @@ dependencies = [
 
 [[package]]
 name = "lepton_image"
-version = "1.0.0"
-source = "git+https://github.com/duplessisaurore/lepton3#8c4fd968f100f64ced698a35d39001fe97ffd6d8"
+version = "1.1.0"
+source = "git+https://github.com/duplessisaurore/lepton3#af53d09cb9683a0cf722f413e0f25176c09f2892"
 dependencies = [
  "hashbrown",
  "lepton_opcodes",
@@ -58,18 +58,27 @@ dependencies = [
 
 [[package]]
 name = "lepton_opcodes"
-version = "1.0.0"
-source = "git+https://github.com/duplessisaurore/lepton3#8c4fd968f100f64ced698a35d39001fe97ffd6d8"
+version = "1.1.0"
+source = "git+https://github.com/duplessisaurore/lepton3#af53d09cb9683a0cf722f413e0f25176c09f2892"
 
 [[package]]
 name = "lepton_vm"
 version = "1.0.0"
-source = "git+https://github.com/duplessisaurore/lepton3#8c4fd968f100f64ced698a35d39001fe97ffd6d8"
+source = "git+https://github.com/duplessisaurore/lepton3#af53d09cb9683a0cf722f413e0f25176c09f2892"
 dependencies = [
  "cfg-if",
  "hashbrown",
  "lepton_image",
  "lepton_opcodes",
+]
+
+[[package]]
+name = "quark_asm"
+version = "1.0.0"
+dependencies = [
+ "hashbrown",
+ "lepton3",
+ "quark_map",
 ]
 
 [[package]]

@@ -19,6 +19,9 @@
 //! as words seperated by `.` characters, this is a slightly more verbose version
 //! of the original instruction set specified by the `Lepton3` virtual machine.
 
+#![warn(clippy::pedantic)]
+#![no_std]
+
 ///
 /// All of the mappings of quark3 correspond
 /// to some opcode in Lepton3.
