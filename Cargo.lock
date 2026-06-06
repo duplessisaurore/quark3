@@ -87,3 +87,11 @@ version = "1.0.0"
 dependencies = [
  "lepton3",
 ]
+
+[[package]]
+name = "quark_std"
+version = "1.0.0"
+dependencies = [
+ "lepton3",
+ "quark_asm",
+]
