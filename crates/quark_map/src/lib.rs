@@ -56,7 +56,11 @@ macro_rules! map_opcode {
 
 
 /// Short textual mapping
-pub mod short;
+mod short;
+pub use short::opcode_from_str as opcode_from_short;
+pub use short::str_from_opcode as short_from_opcode;
 
 /// Long textual mapping
-pub mod long;
+mod long;
+pub use long::opcode_from_str as opcode_from_long;
+pub use long::str_from_opcode as long_from_opcode;
