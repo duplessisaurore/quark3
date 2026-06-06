@@ -1,9 +1,27 @@
+[package]
+name = "quark3"
+version = "1.0.0"
+edition = "2024"
+authors = ["The Quark3 Contributors"]
+
+description = "A textual assembly language that compiles to Lepton3 bytecode."
+readme = "README.md"
+
+repository = "https://github.com/duplessisaurore/quark3"
+license = "AGPLv3"
+
+keywords = ["languages", "scripting", "script"]
+
 [workspace]
 members = [
     "crates/*"
 ]
 
 resolver = "3"
+
+[dependencies]
+quark_map = { workspace = true }
+quark_asm = { workspace = true }
 
 [workspace.dependencies]
 hashbrown = "0.17.1"
