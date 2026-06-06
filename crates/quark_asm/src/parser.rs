@@ -36,6 +36,10 @@ pub(crate) enum Statement {
     /// A label declaration e.g. `loop:` with its source line number
     Label(String, usize),
 
+    /// Attach extra source location information, specifically
+    /// a source file, line and column.
+    SourceLocation(String, usize, usize),
+
     /// An instruction with its source line number
     Instruction(Instruction, usize),
 }
@@ -119,6 +123,9 @@ pub enum ParseError {
     /// A label was encountered outside of a function
     LabelOutsideFunction,
 
+    /// A loc was encountered outside of a function
+    LocOutsideFunction,
+
     /// A required argument was missing
     MissingArgument { directive: String },
 
@@ -144,6 +151,9 @@ impl Display for ParseError {
             }
             Self::LabelOutsideFunction => {
                 write!(f, "label outside of function")
+            }
+            Self::LocOutsideFunction => {
+                write!(f, "loc outside of function")
             }
             Self::MissingArgument { directive } => {
                 write!(f, "missing argument for `{directive}`")
@@ -215,8 +225,28 @@ pub fn parse(input: &str) -> Result<ParsedFile, LinedParseError> {
                 });
             }
 
+            // @loc <file_path> <source_line> <source_col>
+            // Attaches a source location at the current instruction offset
+            ["@loc", file, src_line, src_col] => {
+                let func = current_function
+                    .as_mut()
+                    .ok_or(ParseError::LocOutsideFunction.with_line(line_number))?;
+
+                let s_line = parse_u32(line_number, src_line)?;
+                let s_col = parse_u32(line_number, src_col)?;
+
+                // Clean off any accidental wrapping quotes
+                let clean_file = file.trim_matches('"').to_string();
+
+                func.body.push(Statement::SourceLocation(
+                    clean_file,
+                    s_line as usize,
+                    s_col as usize,
+                ));
+            }
+
             // <label>:
-            // Used for assiting with offset based instructions
+            // Used for assisting with offset based instructions
             [label] if label.ends_with(':') => {
                 let func = current_function
                     .as_mut()

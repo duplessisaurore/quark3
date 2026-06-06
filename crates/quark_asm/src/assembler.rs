@@ -7,7 +7,7 @@ use alloc::string::ToString;
 use alloc::{string::String, vec::Vec};
 use hashbrown::HashMap;
 use lepton3::Opcode;
-use lepton3::format::{Function, Header, Image, ObjectType};
+use lepton3::format::{DebugInfo, Function, Header, Image, ObjectType, SourceLocation};
 use lepton3::lepton_image::flags::ImageFlags;
 
 use crate::parser::{Instruction, ParsedFile, Statement};
@@ -94,15 +94,21 @@ pub fn assemble(parsed: ParsedFile, version_major: u8) -> Result<Image, Assemble
     let object_table = parsed
         .objects
         .iter()
-        .map(|(_, fields)| ObjectType { field_count: *fields })
+        .map(|(_, fields)| ObjectType {
+            field_count: *fields,
+        })
         .collect();
+
+    // Setup debug tracking
+    let mut debug_files: Vec<String> = Vec::new();
+    let mut file_to_idx: HashMap<String, u32> = HashMap::new();
+    let mut debug_locations: Vec<SourceLocation> = Vec::new();
 
     // Build the flags the image will have at the end
     let mut flags = ImageFlags::from_raw(0);
     flags.set(ImageFlags::DEBUG_INFO);
-
     // Assemble each function into the instruction stream
-    let mut function_table  = Vec::new();
+    let mut function_table = Vec::new();
     let mut instruction_stream = Vec::new();
 
     for func in &parsed.functions {
@@ -135,20 +141,49 @@ pub fn assemble(parsed: ParsedFile, version_major: u8) -> Result<Image, Assemble
                 Statement::Instruction(instr, _) => {
                     offset += instr.byte_size();
                 }
+
+                // A sourcelocation is a seperate directive that does not
+                // contribute to size
+                Statement::SourceLocation(_, _, _) => {}
             }
         }
 
-        // Now we have all labels, we can emit each instruction into the stream
+        // Now we have all labels, we can handle all statements properly
         for statement in &func.body {
-            if let Statement::Instruction(instr, line) = statement {
-                emit_instruction(
-                    instr,
-                    *line,
-                    &labels,
-                    &function_map,
-                    &object_map,
-                    &mut instruction_stream,
-                )?;
+            match statement {
+                // Emit an instruction into the stream
+                Statement::Instruction(instr, line) => {
+                    emit_instruction(
+                        instr,
+                        *line,
+                        &labels,
+                        &function_map,
+                        &object_map,
+                        &mut instruction_stream,
+                    )?;
+                }
+                // Emit a source location into the debug info
+                Statement::SourceLocation(file_path, line, col) => {
+                    // Get the file name index if it exists, else add to the debug table
+                    let file_idx = match file_to_idx.get(file_path) {
+                        Some(&idx) => idx,
+                        None => {
+                            let idx = debug_files.len() as u32;
+                            debug_files.push(file_path.clone());
+                            file_to_idx.insert(file_path.clone(), idx);
+                            idx
+                        }
+                    };
+
+                    // Capture the current stream position for the impending instruction
+                    debug_locations.push(SourceLocation {
+                        instruction_offset: instruction_stream.len() as u32,
+                        file: file_idx,
+                        line: *line as u32,
+                        column: *col as u32,
+                    });
+                }
+                Statement::Label(_, _) => {}
             }
         }
 
@@ -163,6 +198,12 @@ pub fn assemble(parsed: ParsedFile, version_major: u8) -> Result<Image, Assemble
         });
     }
 
+    // Debug info we attach onto the image
+    let debug_info = Some(DebugInfo {
+        files: debug_files,
+        locations: debug_locations,
+    });
+
     Ok(Image {
         header: Header {
             version_major,
@@ -172,7 +213,7 @@ pub fn assemble(parsed: ParsedFile, version_major: u8) -> Result<Image, Assemble
         object_table,
         function_table,
         instructions: instruction_stream,
-        debug_info: None,
+        debug_info,
     })
 }
 
@@ -206,7 +247,7 @@ fn emit_instruction(
             out.push(Opcode::PushBool as u8);
             out.push(*value as u8);
         }
-        
+
         // Multi-output instructions
         // For the labels we can now resolve them using our label map.
         Instruction::Jump(label) => {
@@ -235,38 +276,37 @@ fn emit_instruction(
 
         // We resolve functions using the function map.
         Instruction::Call(name) => {
-            let idx = function_map
-                .get(name.as_str())
-                .copied()
-                .ok_or(AssembleError::UndefinedFunction {
+            let idx = function_map.get(name.as_str()).copied().ok_or(
+                AssembleError::UndefinedFunction {
                     line,
                     name: name.clone(),
-                })?;
+                },
+            )?;
             push_int(out, idx as i64);
             out.push(Opcode::Call as u8);
         }
 
         Instruction::TailCall(name) => {
-            let idx = function_map
-                .get(name.as_str())
-                .copied()
-                .ok_or(AssembleError::UndefinedFunction {
+            let idx = function_map.get(name.as_str()).copied().ok_or(
+                AssembleError::UndefinedFunction {
                     line,
                     name: name.clone(),
-                })?;
+                },
+            )?;
             push_int(out, idx as i64);
             out.push(Opcode::TailCall as u8);
         }
 
         // And objects using the object map.
         Instruction::ObjectNew(name) => {
-            let idx = object_map
-                .get(name.as_str())
-                .copied()
-                .ok_or(AssembleError::UndefinedObject {
-                    line,
-                    name: name.clone(),
-                })?;
+            let idx =
+                object_map
+                    .get(name.as_str())
+                    .copied()
+                    .ok_or(AssembleError::UndefinedObject {
+                        line,
+                        name: name.clone(),
+                    })?;
             push_int(out, idx as i64);
             out.push(Opcode::ObjectNew as u8);
         }
@@ -276,7 +316,7 @@ fn emit_instruction(
 }
 
 /// Emit a `push.int` instruction with the given value into the output
-/// 
+///
 /// This is a helper used by instructions that need to push an operand
 /// before emitting their opcode
 fn push_int(out: &mut Vec<u8>, value: i64) {
@@ -285,7 +325,7 @@ fn push_int(out: &mut Vec<u8>, value: i64) {
 }
 
 /// Resolve a label name to its byte offset within the current function
-/// 
+///
 /// This is just a helper to stop repeating the labels.get.blahblah in each
 /// match path.
 fn resolve_label(

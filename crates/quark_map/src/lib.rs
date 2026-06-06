@@ -1,4 +1,4 @@
-//! `Quark3` is an experimental free and open-source textual assembly language 
+//! `Quark3` is an experimental free and open-source textual assembly language
 //! that compiles to `Lepton3` bytecode as part of the `Fermion3` language project.
 //!
 //! Check out the [repository README](https://github.com/duplessisaurore/quark3/blob/main/README.md)
@@ -10,10 +10,10 @@
 //! The `quark_map` crate provides mappings between
 //! two different forms of textual bytecode representations to
 //! the actual opcodes for the instruction.
-//! 
+//!
 //! These two forms are the `short` form and the `long` form which are both
 //! case-insensitive.
-//! 
+//!
 //! The `short` form expresses each instruction in `3` characters. The long
 //! form is a fully descriptive version that describes the entire instruction
 //! as words seperated by `.` characters, this is a slightly more verbose version
@@ -32,12 +32,12 @@
 /// This `map_opcode` macro outputs the mapping as two functions,
 /// one which converts the opcode to the string form, and the string
 /// form to the opcode.
-/// 
+///
 /// The string form to the opcode may fail in the match, and therefore
 /// it returns an Option<>
-/// 
+///
 /// Each entry should be as follows:
-/// 
+///
 /// "string_name" = <Opcode>,
 ///
 macro_rules! map_opcode {
@@ -56,7 +56,6 @@ macro_rules! map_opcode {
         }
     };
 }
-
 
 /// Short textual mapping
 mod short;

@@ -1,4 +1,4 @@
-//! `Quark3` is an experimental free and open-source textual assembly language 
+//! `Quark3` is an experimental free and open-source textual assembly language
 //! that compiles to `Lepton3` bytecode as part of the `Fermion3` language project.
 //!
 //! Check out the [repository README](https://github.com/duplessisaurore/quark3/blob/main/README.md)
@@ -20,8 +20,8 @@
 // from the assembler side that would be used frequently
 pub use quark_asm::assembler::AssembleError;
 pub use quark_asm::assembler::assemble;
-pub use quark_asm::parser::ParseError;
 pub use quark_asm::parser::LinedParseError;
+pub use quark_asm::parser::ParseError;
 pub use quark_asm::parser::parse;
 
 // Rexport the internal crates for usage

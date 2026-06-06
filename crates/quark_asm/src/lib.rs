@@ -1,4 +1,4 @@
-//! `Quark3` is an experimental free and open-source textual assembly language 
+//! `Quark3` is an experimental free and open-source textual assembly language
 //! that compiles to `Lepton3` bytecode as part of the `Fermion3` language project.
 //!
 //! Check out the [repository README](https://github.com/duplessisaurore/quark3/blob/main/README.md)
