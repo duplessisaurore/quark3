@@ -15,4 +15,5 @@ keywords = ["languages", "scripting", "script"]
 [dependencies]
 lepton3 = { workspace = true }
 quark_map = { workspace = true }
+quark_debug = { workspace = true }
 hashbrown = { workspace = true }

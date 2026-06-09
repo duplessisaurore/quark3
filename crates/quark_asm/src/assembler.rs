@@ -9,6 +9,7 @@ use hashbrown::HashMap;
 use lepton3::Opcode;
 use lepton3::format::{DebugInfo, Function, Header, Image, ObjectType, SourceLocation};
 use lepton3::lepton_image::flags::ImageFlags;
+use quark_debug::source_map::{FunctionEntry, LabelEntry, ObjectEntry, SourceMap};
 
 use crate::parser::{Instruction, ParsedFile, Statement};
 
@@ -32,6 +33,14 @@ pub enum AssembleError {
 
     /// A duplicate label was declared within the same function
     DuplicateLabel { line: usize, label: String },
+}
+
+/// Output of the assembler
+pub struct AssembleOutput {
+    pub image: Image,
+
+    /// Optional source map for dissassembly
+    pub source_map: Option<SourceMap>,
 }
 
 impl core::fmt::Display for AssembleError {
@@ -65,7 +74,11 @@ impl core::fmt::Display for AssembleError {
 ///
 /// Returns an `AssembleError` if the assembly contains a semantic
 /// error such as an undefined label, function, or object reference.
-pub fn assemble(parsed: ParsedFile, version_major: u8) -> Result<Image, AssembleError> {
+pub fn assemble(
+    parsed: ParsedFile,
+    version_major: u8,
+    emit_source_map: bool,
+) -> Result<AssembleOutput, AssembleError> {
     // Build a map of object names to the index
     // they will be in the image
     let object_map = parsed
@@ -107,9 +120,13 @@ pub fn assemble(parsed: ParsedFile, version_major: u8) -> Result<Image, Assemble
     // Build the flags the image will have at the end
     let mut flags = ImageFlags::from_raw(0);
     flags.set(ImageFlags::DEBUG_INFO);
+
     // Assemble each function into the instruction stream
     let mut function_table = Vec::new();
     let mut instruction_stream = Vec::new();
+
+    // Source map if requested for function mapping
+    let mut source_map_functions: Vec<FunctionEntry> = Vec::new();
 
     for func in &parsed.functions {
         let instruction_offset = instruction_stream.len() as u32;
@@ -190,6 +207,24 @@ pub fn assemble(parsed: ParsedFile, version_major: u8) -> Result<Image, Assemble
         // And then push each function into the image's function table
         let instruction_length = instruction_stream.len() as u32 - instruction_offset;
 
+        // Emit source map for this function if requested, this allows us to
+        // map the function name back into the name in the qk3 source and
+        // the labels back
+        if emit_source_map {
+            let func_idx = function_map[func.name.as_str()];
+            source_map_functions.push(FunctionEntry {
+                index: func_idx as u32,
+                name: func.name.clone(),
+                labels: labels
+                    .iter()
+                    .map(|(&name, &offset)| LabelEntry {
+                        offset: offset as u32,
+                        name: name.into(),
+                    })
+                    .collect(),
+            });
+        }
+
         function_table.push(Function {
             arg_count: func.args,
             local_count: func.locals,
@@ -198,13 +233,12 @@ pub fn assemble(parsed: ParsedFile, version_major: u8) -> Result<Image, Assemble
         });
     }
 
-    // Debug info we attach onto the image
     let debug_info = Some(DebugInfo {
         files: debug_files,
         locations: debug_locations,
     });
 
-    Ok(Image {
+    let image = Image {
         header: Header {
             version_major,
             flags,
@@ -214,7 +248,31 @@ pub fn assemble(parsed: ParsedFile, version_major: u8) -> Result<Image, Assemble
         function_table,
         instructions: instruction_stream,
         debug_info,
-    })
+    };
+
+    // Collect source map entries for objects
+    let objects: Vec<ObjectEntry> = if emit_source_map {
+        let mut entries: Vec<ObjectEntry> = object_map
+            .iter()
+            .map(|(&name, &index)| ObjectEntry {
+                index: index as u32,
+                name: name.into(),
+            })
+            .collect();
+
+        // Sort by index so the source map order matches the object table
+        entries.sort_unstable_by_key(|entry| entry.index);
+        entries
+    } else {
+        Vec::new()
+    };
+
+    let source_map = emit_source_map.then(|| SourceMap {
+        functions: source_map_functions,
+        objects,
+    });
+
+    Ok(AssembleOutput { image, source_map })
 }
 
 /// Emit a single instruction into the instruction stream
