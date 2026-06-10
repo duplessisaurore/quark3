@@ -39,7 +39,7 @@ pub fn pretty_print(source: impl Display, file: &ParsedFile) -> String {
                 }
 
                 Statement::SourceLocation(file, line, col) => {
-                    let _ = writeln!(out, "@loc {file} {line} {col}");
+                    let _ = writeln!(out, "    @loc {file} {line} {col}");
                 }
 
                 Statement::Instruction(instr, _) => {
