@@ -3,6 +3,8 @@
 //! Takes a `ParsedFile` from the parser and assembles it into
 //! a Lepton3 image.
 
+use core::num::TryFromIntError;
+
 use alloc::string::ToString;
 use alloc::{string::String, vec::Vec};
 use hashbrown::HashMap;
@@ -33,6 +35,28 @@ pub enum AssembleError {
 
     /// A duplicate label was declared within the same function
     DuplicateLabel { line: usize, label: String },
+
+    /// The instruction stream is too long for a function
+    /// and cannot be assembled properly into a bytecode image
+    InstructionStreamTooLong { function: String },
+
+    /// The instruction offset/table entry is too large to be converted to an
+    /// integer
+    InstructionOperandTooLarge,
+
+    /// There are too many debug files to be succesfully converted
+    /// into the image
+    DebugFilesTooLong,
+
+    /// The debug source location column/line is too large and
+    /// cannot be properly turned into a lepton3 debug location
+    DebugSourceColumnLineTooLarge,
+
+    /// There are too many functions and the output cannot be emitted
+    TooManyFunctions,
+
+    /// There are too many object types and the output cannot be emitted
+    TooManyObjects,
 }
 
 /// Output of the assembler
@@ -64,6 +88,39 @@ impl core::fmt::Display for AssembleError {
             Self::DuplicateLabel { line, label } => {
                 write!(f, "line {line}: duplicate label `{label}`")
             }
+            Self::InstructionStreamTooLong { function } => {
+                write!(
+                    f,
+                    "function {function}: instruction stream too long, cannot write to image"
+                )
+            }
+            Self::DebugFilesTooLong => {
+                write!(f, "too many debug files, cannot write to image")
+            }
+            Self::DebugSourceColumnLineTooLarge => {
+                write!(
+                    f,
+                    "too large column or line in source location, cannot write to image"
+                )
+            }
+            Self::TooManyFunctions => {
+                write!(
+                    f,
+                    "too many functions for function tables, cannot write to image"
+                )
+            }
+            Self::TooManyObjects => {
+                write!(
+                    f,
+                    "too many objects for object tables, cannot write to image"
+                )
+            }
+            Self::InstructionOperandTooLarge => {
+                write!(
+                    f,
+                    "instruction operand too large to be converted to integer"
+                )
+            }
         }
     }
 }
@@ -74,6 +131,7 @@ impl core::fmt::Display for AssembleError {
 ///
 /// Returns an `AssembleError` if the assembly contains a semantic
 /// error such as an undefined label, function, or object reference.
+#[allow(clippy::too_many_lines)]
 pub fn assemble(
     parsed: ParsedFile,
     version_major: u8,
@@ -129,7 +187,11 @@ pub fn assemble(
     let mut source_map_functions: Vec<FunctionEntry> = Vec::new();
 
     for func in &parsed.functions {
-        let instruction_offset = instruction_stream.len() as u32;
+        let instruction_offset = u32::try_from_or_assemble_error(instruction_stream.len(), |_| {
+            AssembleError::InstructionStreamTooLong {
+                function: func.name.clone(),
+            }
+        })?;
 
         // We need to do a prepass for grabbing all the offsets to
         // each label in the function for the instructions
@@ -182,8 +244,13 @@ pub fn assemble(
                 // Emit a source location into the debug info
                 Statement::SourceLocation(file_path, line, col) => {
                     // Get the file name index if it exists, else add to the debug table
-                    let file_idx = if let Some(&idx) = file_to_idx.get(file_path) { idx } else {
-                        let idx = debug_files.len() as u32;
+                    let file_idx = if let Some(&idx) = file_to_idx.get(file_path) {
+                        idx
+                    } else {
+                        let idx =
+                            u32::try_from_or_assemble_error(instruction_stream.len(), |_| {
+                                AssembleError::DebugFilesTooLong
+                            })?;
                         debug_files.push(file_path.clone());
                         file_to_idx.insert(file_path.clone(), idx);
                         idx
@@ -191,10 +258,19 @@ pub fn assemble(
 
                     // Capture the current stream position for the impending instruction
                     debug_locations.push(SourceLocation {
-                        instruction_offset: instruction_stream.len() as u32,
+                        instruction_offset: u32::try_from_or_assemble_error(
+                            instruction_stream.len(),
+                            |_| AssembleError::InstructionStreamTooLong {
+                                function: func.name.clone(),
+                            },
+                        )?,
                         file: file_idx,
-                        line: *line as u32,
-                        column: *col as u32,
+                        line: u32::try_from_or_assemble_error(*line, |_| {
+                            AssembleError::DebugSourceColumnLineTooLarge
+                        })?,
+                        column: u32::try_from_or_assemble_error(*col, |_| {
+                            AssembleError::DebugSourceColumnLineTooLarge
+                        })?,
                     });
                 }
                 Statement::Label(_, _) => {}
@@ -202,7 +278,11 @@ pub fn assemble(
         }
 
         // And then push each function into the image's function table
-        let instruction_length = instruction_stream.len() as u32 - instruction_offset;
+        let instruction_length = u32::try_from_or_assemble_error(instruction_stream.len(), |_| {
+            AssembleError::InstructionStreamTooLong {
+                function: func.name.clone(),
+            }
+        })? - instruction_offset;
 
         // Emit source map for this function if requested, this allows us to
         // map the function name back into the name in the qk3 source and
@@ -210,15 +290,23 @@ pub fn assemble(
         if emit_source_map {
             let func_idx = function_map[func.name.as_str()];
             source_map_functions.push(FunctionEntry {
-                index: func_idx as u32,
+                index: u32::try_from_or_assemble_error(func_idx, |_| {
+                    AssembleError::TooManyFunctions
+                })?,
                 name: func.name.clone(),
                 labels: labels
                     .iter()
-                    .map(|(&name, &offset)| LabelEntry {
-                        offset: offset as u32,
-                        name: name.into(),
+                    .map(|(&name, &offset)| {
+                        Ok(LabelEntry {
+                            offset: u32::try_from_or_assemble_error(offset, |_| {
+                                AssembleError::InstructionStreamTooLong {
+                                    function: func.name.clone(),
+                                }
+                            })?,
+                            name: name.into(),
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<_, AssembleError>>()?,
             });
         }
 
@@ -239,7 +327,9 @@ pub fn assemble(
         header: Header {
             version_major,
             flags,
-            entry_point: entry_point as u32,
+            entry_point: u32::try_from_or_assemble_error(entry_point, |_| {
+                AssembleError::TooManyFunctions
+            })?,
         },
         object_table,
         function_table,
@@ -249,13 +339,18 @@ pub fn assemble(
 
     // Collect source map entries for objects
     let objects: Vec<ObjectEntry> = if emit_source_map {
-        let mut entries: Vec<ObjectEntry> = object_map
+        let mut entries = object_map
             .iter()
-            .map(|(&name, &index)| ObjectEntry {
-                index: index as u32,
-                name: name.into(),
+            .map(|(&name, &index)| {
+                let index =
+                    u32::try_from_or_assemble_error(index, |_| AssembleError::TooManyObjects)?;
+
+                Ok(ObjectEntry {
+                    index,
+                    name: name.into(),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<ObjectEntry>, AssembleError>>()?;
 
         // Sort by index so the source map order matches the object table
         entries.sort_unstable_by_key(|entry| entry.index);
@@ -273,6 +368,7 @@ pub fn assemble(
 }
 
 /// Emit a single instruction into the instruction stream
+#[allow(clippy::too_many_lines)]
 fn emit_instruction(
     instr: &Instruction,
     line: usize,
@@ -307,25 +403,45 @@ fn emit_instruction(
         // For the labels we can now resolve them using our label map.
         Instruction::Jump(label) => {
             let offset = resolve_label(line, label, labels)?;
-            push_int(out, offset as i64);
+            push_int(
+                out,
+                i64::try_from_or_assemble_error(offset, |_| {
+                    AssembleError::InstructionOperandTooLarge
+                })?,
+            );
             out.push(Opcode::Jump as u8);
         }
 
         Instruction::JumpIfTrue(label) => {
             let offset = resolve_label(line, label, labels)?;
-            push_int(out, offset as i64);
+            push_int(
+                out,
+                i64::try_from_or_assemble_error(offset, |_| {
+                    AssembleError::InstructionOperandTooLarge
+                })?,
+            );
             out.push(Opcode::JumpIfTrue as u8);
         }
 
         Instruction::JumpIfFalse(label) => {
             let offset = resolve_label(line, label, labels)?;
-            push_int(out, offset as i64);
+            push_int(
+                out,
+                i64::try_from_or_assemble_error(offset, |_| {
+                    AssembleError::InstructionOperandTooLarge
+                })?,
+            );
             out.push(Opcode::JumpIfFalse as u8);
         }
 
         Instruction::Try(label) => {
             let offset = resolve_label(line, label, labels)?;
-            push_int(out, offset as i64);
+            push_int(
+                out,
+                i64::try_from_or_assemble_error(offset, |_| {
+                    AssembleError::InstructionOperandTooLarge
+                })?,
+            );
             out.push(Opcode::Try as u8);
         }
 
@@ -337,7 +453,12 @@ fn emit_instruction(
                     name: name.clone(),
                 },
             )?;
-            push_int(out, idx as i64);
+            push_int(
+                out,
+                i64::try_from_or_assemble_error(idx, |_| {
+                    AssembleError::InstructionOperandTooLarge
+                })?,
+            );
             out.push(Opcode::Call as u8);
         }
 
@@ -348,7 +469,12 @@ fn emit_instruction(
                     name: name.clone(),
                 },
             )?;
-            push_int(out, idx as i64);
+            push_int(
+                out,
+                i64::try_from_or_assemble_error(idx, |_| {
+                    AssembleError::InstructionOperandTooLarge
+                })?,
+            );
             out.push(Opcode::TailCall as u8);
         }
 
@@ -362,7 +488,12 @@ fn emit_instruction(
                         line,
                         name: name.clone(),
                     })?;
-            push_int(out, idx as i64);
+            push_int(
+                out,
+                i64::try_from_or_assemble_error(idx, |_| {
+                    AssembleError::InstructionOperandTooLarge
+                })?,
+            );
             out.push(Opcode::ObjectNew as u8);
         }
     }
@@ -395,4 +526,44 @@ fn resolve_label(
             line,
             label: label.to_string(),
         })
+}
+
+/// Try convert an value (Lepton3 image) to another value (offset into a stream or something)
+/// with the failure case returning an `AssembleError` from a closure
+trait TryFromOrAssembleError<Source: Sized>: Sized {
+    type Error;
+
+    /// This function should try convert to this type from another
+    /// or return an `AssembleError` if it cannot be succesfully converted
+    ///
+    /// # Errors
+    ///
+    /// This should error with an `AssembleError` if the `other` value cannot
+    /// be cast safely and successfully to the Self type
+    fn try_from_or_assemble_error<T: Fn(Self::Error) -> AssembleError>(
+        value: Source,
+        err: T,
+    ) -> Result<Self, AssembleError>;
+}
+
+impl TryFromOrAssembleError<usize> for u32 {
+    type Error = TryFromIntError;
+
+    fn try_from_or_assemble_error<T: Fn(Self::Error) -> AssembleError>(
+        value: usize,
+        err: T,
+    ) -> Result<Self, AssembleError> {
+        u32::try_from(value).map_err(err)
+    }
+}
+
+impl TryFromOrAssembleError<usize> for i64 {
+    type Error = TryFromIntError;
+
+    fn try_from_or_assemble_error<T: Fn(Self::Error) -> AssembleError>(
+        value: usize,
+        err: T,
+    ) -> Result<Self, AssembleError> {
+        i64::try_from(value).map_err(err)
+    }
 }
