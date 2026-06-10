@@ -38,7 +38,7 @@
 ///
 /// Each entry should be as follows:
 ///
-/// "string_name" = <Opcode>,
+/// "`string_name`" = <Opcode>,
 ///
 macro_rules! map_opcode {
     ($($name:literal = $opcode:path),* $(,)?) => {

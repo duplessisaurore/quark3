@@ -70,10 +70,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Strip debug info from the image if requested
     if cli.strip_debug {
-        println!(
-            "quark3 stripping debug table in {}",
-            output_path.display()
-        );
+        println!("quark3 stripping debug table in {}", output_path.display());
         image.strip_debug();
     }
 
