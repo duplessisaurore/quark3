@@ -1,3 +1,8 @@
+//! Dissassembler for Quark3 Assembly
+//!
+//! Takes an `Image` from `Lepton3` and disassembles it into
+//! a Quark3 `ParsedFile`.
+
 use core::{
     num::TryFromIntError,
     ops::{Deref, DerefMut},

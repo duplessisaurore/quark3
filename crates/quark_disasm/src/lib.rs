@@ -19,3 +19,7 @@ extern crate alloc;
 /// The dissassembler itself which takes in a `Lepton3` image and produces
 /// a Quark3 parsed output
 pub mod dissassembler;
+
+/// The pretty printer that can take a Quark3 parsed output and produce the
+/// Quark3 textual code from it
+pub mod pretty_printer;
