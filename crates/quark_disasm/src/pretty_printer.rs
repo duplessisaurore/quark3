@@ -12,7 +12,7 @@ pub fn pretty_print(source: impl Display, file: &ParsedFile) -> String {
     let mut out = String::new();
 
     // source file header content
-    let _ = write!(out, "// Disassembled from {source}");
+    let _ = write!(out, "// Disassembled from {source}\n");
 
     // @entry
     if let Some(entry) = &file.entry {
