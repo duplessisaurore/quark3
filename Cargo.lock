@@ -281,6 +281,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark_std_disasm"
+version = "1.0.0"
+dependencies = [
+ "clap",
+ "lepton3",
+ "quark_debug",
+ "quark_disasm",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"

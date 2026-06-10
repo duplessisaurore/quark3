@@ -23,3 +23,9 @@ pub mod dissassembler;
 /// The pretty printer that can take a Quark3 parsed output and produce the
 /// Quark3 textual code from it
 pub mod pretty_printer;
+
+// Re-export the actual parts that are important
+pub use dissassembler::DisassembleError;
+pub use dissassembler::disassemble;
+
+pub use pretty_printer::pretty_print;

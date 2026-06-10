@@ -31,3 +31,4 @@ lepton3 = { git = "https://github.com/duplessisaurore/lepton3" }
 quark_map = { path = "./crates/quark_map" }
 quark_asm = { path = "./crates/quark_asm" }
 quark_debug = { path = "./crates/quark_debug" }
+quark_disasm = { path = "./crates/quark_disasm" }
