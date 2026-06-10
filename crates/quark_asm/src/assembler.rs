@@ -248,7 +248,7 @@ pub fn assemble(
                         idx
                     } else {
                         let idx =
-                            u32::try_from_or_assemble_error(instruction_stream.len(), |_| {
+                            u32::try_from_or_assemble_error(debug_files.len(), |_| {
                                 AssembleError::DebugFilesTooLong
                             })?;
                         debug_files.push(file_path.clone());
