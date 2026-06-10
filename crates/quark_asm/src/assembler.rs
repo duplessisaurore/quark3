@@ -182,14 +182,11 @@ pub fn assemble(
                 // Emit a source location into the debug info
                 Statement::SourceLocation(file_path, line, col) => {
                     // Get the file name index if it exists, else add to the debug table
-                    let file_idx = match file_to_idx.get(file_path) {
-                        Some(&idx) => idx,
-                        None => {
-                            let idx = debug_files.len() as u32;
-                            debug_files.push(file_path.clone());
-                            file_to_idx.insert(file_path.clone(), idx);
-                            idx
-                        }
+                    let file_idx = if let Some(&idx) = file_to_idx.get(file_path) { idx } else {
+                        let idx = debug_files.len() as u32;
+                        debug_files.push(file_path.clone());
+                        file_to_idx.insert(file_path.clone(), idx);
+                        idx
                     };
 
                     // Capture the current stream position for the impending instruction
@@ -267,7 +264,7 @@ pub fn assemble(
         Vec::new()
     };
 
-    let source_map = emit_source_map.then(|| SourceMap {
+    let source_map = emit_source_map.then_some(SourceMap {
         functions: source_map_functions,
         objects,
     });
@@ -303,7 +300,7 @@ fn emit_instruction(
 
         Instruction::PushBool(value) => {
             out.push(Opcode::PushBool as u8);
-            out.push(*value as u8);
+            out.push(u8::from(*value));
         }
 
         // Multi-output instructions

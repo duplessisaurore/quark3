@@ -253,6 +253,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "quark_disasm"
+version = "1.0.0"
+dependencies = [
+ "hashbrown",
+ "lepton3",
+ "quark_asm",
+ "quark_debug",
+ "quark_map",
+]
+
+[[package]]
 name = "quark_map"
 version = "1.0.0"
 dependencies = [

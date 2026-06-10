@@ -14,25 +14,25 @@ use quark_map::{long_from_opcode, opcode_from_long, opcode_from_short};
 /// A parsed Quark3 source file
 pub struct ParsedFile {
     /// The entry point function name
-    pub(crate) entry: Option<String>,
+    pub entry: Option<String>,
 
     /// Object type declarations
-    pub(crate) objects: Vec<(String, u32)>,
+    pub objects: Vec<(String, u32)>,
 
     /// Function declarations
-    pub(crate) functions: Vec<Function>,
+    pub functions: Vec<Function>,
 }
 
 /// A parsed function before assembly
-pub(crate) struct Function {
-    pub(crate) name: String,
-    pub(crate) args: u32,
-    pub(crate) locals: u32,
-    pub(crate) body: Vec<Statement>,
+pub struct Function {
+    pub name: String,
+    pub args: u32,
+    pub locals: u32,
+    pub body: Vec<Statement>,
 }
 
 /// A statement inside a function body
-pub(crate) enum Statement {
+pub enum Statement {
     /// A label declaration e.g. `loop:` with its source line number
     Label(String, usize),
 
@@ -49,7 +49,7 @@ pub(crate) enum Statement {
 /// We attach some extra operand powers to some instructions
 /// to improve writing ability for a programmr instead of having
 /// to always push.int before calling jump or something
-pub(crate) enum Instruction {
+pub enum Instruction {
     /// A plain no-operand instruction
     Plain(Opcode),
 
@@ -89,7 +89,8 @@ impl Instruction {
     ///
     /// This is used during the label prepass to compute the offset the label
     /// is at for offset as operand instructions.
-    pub(crate) fn byte_size(&self) -> usize {
+    #[must_use]
+    pub fn byte_size(&self) -> usize {
         match self {
             // Emits opcode and constant
             Self::PushInt(_) | Self::PushFloat(_) => 9,
@@ -382,7 +383,7 @@ fn parse_instruction(line: usize, tokens: &[&str]) -> Result<Instruction, LinedP
     }
 }
 
-/// Require a token at a given index or return a MissingArgument error
+/// Require a token at a given index or return a `MissingArgument` error
 ///
 /// This should be used by directives/instructions to ensure an argument
 /// exists
