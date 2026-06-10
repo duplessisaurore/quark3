@@ -1,4 +1,4 @@
-name: Build quark_std
+name: Build quark_stds
 
 on:
   push:
@@ -16,3 +16,6 @@ jobs:
 
       - name: Build quark_std
         run: cargo build -p quark_std --release
+
+      - name: Build quark_std_disasm
+        run: cargo build -p quark_std_disasm --release
