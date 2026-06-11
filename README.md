@@ -226,7 +226,7 @@ For booleans the accepted constnat values are `1`/`true` or `0`/`false`.
 
 ### Integer Arithmetic
 
-| Long Form | Short Form | Opcode |language
+| Long Form | Short Form | Opcode |
 |-----------|------------|---------|
 | int.add | iad | Add |
 | int.sub | isb | Sub |
