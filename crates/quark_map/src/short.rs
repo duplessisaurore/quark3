@@ -48,6 +48,7 @@ map_opcode! {
     "aln" = Opcode::ArrayLength,
     "nth" = Opcode::ArrayNth,
     "aap" = Opcode::ArrayAppend,
+    "ast" = Opcode::ArraySet,
     "onw" = Opcode::ObjectNew,
     "ost" = Opcode::ObjectSet,
     "ogt" = Opcode::ObjectGet,
