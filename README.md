@@ -406,7 +406,7 @@ object.new Nothing
 
 The `quark_std` crate provides a rust-standard supported binary for the `Quark3` assembler.
 
-This assembles the `Quark3` textual source code into a `Lepton3` `im`age. It optionally can also output a **source map** which holds references to all the names used in the source code and where they were used.
+This assembles the `Quark3` textual source code into a `Lepton3` image. It optionally can also output a **source map** which holds references to all the names used in the source code and where they were used.
 
 The advantages of `Quark3` being so close to the `Lepton3` bytecode, without much sugar on top of just being a literal textual map to the image is that we can easily **disassemble** the image back into `Quark3` source code (excl. whitespace and comments).
 
