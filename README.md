@@ -82,9 +82,9 @@ This directive defines a new entry in the **object table** of the image.
 @fn new_point 2 2
 
     // Load arguments to function
-    push.int 0
+    push.uint 0
     load
-    push.int 1
+    push.uint 1
     load
 
     // Make Point (two fields) from the locals
@@ -113,9 +113,9 @@ This directive defines a new entry in the **function table** of the image.
 @fn my_function 2 2
 
     // Load arguments to function into stack
-    push.int 0
+    push.uint 0
     load
-    push.int 1
+    push.uint 1
     load
     
     return 
@@ -137,9 +137,9 @@ This directive defines a new entry in the **debug info** of the image.
 
 ```
 @fn new_point 2 2
-    push.int 0
+    push.uint 0
     load
-    push.int 1
+    push.uint 1
     load
 
     // These instructions (matches closest loc)
@@ -165,7 +165,7 @@ into some function's body, for example:
 ```
 @fn count_down 1 1
 
-    push.int 0
+    push.uint 0
     load
 
     push.int 0
@@ -173,7 +173,7 @@ into some function's body, for example:
 
     jump.if.true done
 
-    push.int 0
+    push.uint 0
     load
 
     push.int 1
@@ -202,6 +202,7 @@ There are two available forms:
 | Long Form | Short Form | Opcode |
 |-----------|------------|---------|
 | push.int | pin | PushInt |
+| push.uint | pui | PushUInt |
 | push.float | pfl | PushFloat |
 | push.bool | pbl | PushBool |
 | push.unit | pun | PushUnit |
@@ -209,17 +210,20 @@ There are two available forms:
 | pop | pop | Pop |
 | swap | swp | Swap |
 
-For the `PushInt`/`PushFloat`/`PushBool` instructions, the operand is inlined as follows:
+For the `PushInt`/`PushUInt`/`PushFloat`/`PushBool` instructions, the operand is inlined as follows:
 
 ```
 // Pushes the constant integer '7' onto the stack
 push.int 7
 
 // Pushes the constant boolean true onto the stack
-push.int true
+push.bool true
 
 // Pushes the constant float 6.7 onto the stack
-push.int 6.7
+push.float 6.7
+
+// Pushes the constant unsigned int '7' onto the stack
+push.uint 7
 ```
 
 For booleans the accepted constnat values are `1`/`true` or `0`/`false`.
@@ -228,19 +232,22 @@ For booleans the accepted constnat values are `1`/`true` or `0`/`false`.
 
 | Long Form | Short Form | Opcode |
 |-----------|------------|---------|
-| int.add | iad | Add |
-| int.sub | isb | Sub |
-| int.mul | iml | Mul |
+| numeric.add | nad | Add |
+| numeric.sub | nsb | Sub |
+| numeric.mul | nml | Mul |
 | int.div | idv | Div |
 | int.mod | imd | Mod |
 | int.neg | ing | Neg |
+| uint.div | udv | UDiv |
+| uint.mod | umd | UMod |
 
 ### Bitwise Operations
 
 | Long Form | Short Form | Opcode |
 |-----------|------------|---------|
-| shift.left | shl | ShiftL |
-| shift.right | shr | ShiftR |
+| numeric.shift.left | nsl | ShiftL |
+| int.shift.right | isr | ShiftR |
+| uint.shift.right | usr | UShiftR |
 | bitwise.and | and | And |
 | bitwise.or | orr | Or |
 | bitwise.xor | xor | Xor |
@@ -250,12 +257,16 @@ For booleans the accepted constnat values are `1`/`true` or `0`/`false`.
 
 | Long Form | Short Form | Opcode |
 |-----------|------------|---------|
-| int.equal | ieq | Equal |
-| int.not.equal | inq | NotEqual |
+| numeric.equal | neq | Equal |
+| numeric.not.equal | nnq | NotEqual |
 | int.less.than | ilt | LessThan |
 | int.less.than.equal | ile | LessThanEq |
 | int.greater.than | igt | GreaterThan |
 | int.greater.than.equal | ige | GreaterThanEq |
+| uint.less.than | ult | ULessThan |
+| uint.less.than.equal | ule | ULessThanEq |
+| uint.greater.than | ugt | UGreaterThan |
+| uint.greater.than.equal | uge | UGreaterThanEq |
 
 ### Boolean Operations
 
@@ -399,6 +410,10 @@ object.new Nothing
 |-----------|------------|---------|
 | int.to.float | itf | IntToFloat |
 | float.to.int | fti | FloatToInt |
+| uint.to.float | utf | UIntToFloat |
+| float.to.uint | ftu | FloatToUInt |
+| int.to.uint | itu | IntToUInt |
+| uint.to.int | uti | UIntToInt |
 | type.of | tof | TypeOf |
 
 <a name="quark3-asm-disasm"></a>

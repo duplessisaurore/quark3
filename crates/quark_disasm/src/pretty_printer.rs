@@ -56,6 +56,7 @@ pub fn pretty_print(source: impl Display, file: &ParsedFile) -> String {
                         Instruction::Call(name) => format!("call {name}"),
                         Instruction::TailCall(name) => format!("tail.call {name}"),
                         Instruction::ObjectNew(name) => format!("object.new {name}"),
+                        Instruction::PushUInt(v) => format!("push.uint {v}"),
                     };
                     let _ = writeln!(out, "    {text}");
                 }

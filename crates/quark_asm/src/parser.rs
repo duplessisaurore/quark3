@@ -48,13 +48,16 @@ pub enum Statement {
 ///
 /// We attach some extra operand powers to some instructions
 /// to improve writing ability for a programmr instead of having
-/// to always push.int before calling jump or something
+/// to always push.uint before calling jump or something
 pub enum Instruction {
     /// A plain no-operand instruction
     Plain(Opcode),
 
     /// push.int <value>
     PushInt(i64),
+
+    /// push.uint <value>
+    PushUInt(u64),
 
     /// push.float <value>
     PushFloat(f64),
@@ -93,10 +96,10 @@ impl Instruction {
     pub fn byte_size(&self) -> usize {
         match self {
             // Emits opcode and constant
-            Self::PushInt(_) | Self::PushFloat(_) => 9,
+            Self::PushInt(_) | Self::PushUInt(_) | Self::PushFloat(_) => 9,
             Self::PushBool(_) => 2,
 
-            // Emits a `push.int` (9 bytes) for the operand
+            // Emits a `push.uint` (9 bytes) for the operand
             // followed by the opcode (1 byte) = 10 bytes total
             Self::Jump(_)
             | Self::JumpIfTrue(_)
@@ -301,12 +304,25 @@ fn parse_instruction(line: usize, tokens: &[&str]) -> Result<Instruction, LinedP
             let value = require_arg(line, long_from_opcode(&Opcode::PushInt), tokens, 1)?;
             let value = value.parse::<i64>().map_err(|_| {
                 ParseError::InvalidArgument {
-                    expected: "64-bit Integer",
+                    expected: "64-bit Signed Integer",
                     got: value.to_string(),
                 }
                 .with_line(line)
             })?;
             Ok(Instruction::PushInt(value))
+        }
+
+        Opcode::PushUInt => {
+            // The constant value is an u64 argument, try cast
+            let value = require_arg(line, long_from_opcode(&Opcode::PushUInt), tokens, 1)?;
+            let value = value.parse::<u64>().map_err(|_| {
+                ParseError::InvalidArgument {
+                    expected: "64-bit Unsigned Integer",
+                    got: value.to_string(),
+                }
+                .with_line(line)
+            })?;
+            Ok(Instruction::PushUInt(value))
         }
 
         Opcode::PushFloat => {

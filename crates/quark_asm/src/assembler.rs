@@ -247,10 +247,9 @@ pub fn assemble(
                     let file_idx = if let Some(&idx) = file_to_idx.get(file_path) {
                         idx
                     } else {
-                        let idx =
-                            u32::try_from_or_assemble_error(debug_files.len(), |_| {
-                                AssembleError::DebugFilesTooLong
-                            })?;
+                        let idx = u32::try_from_or_assemble_error(debug_files.len(), |_| {
+                            AssembleError::DebugFilesTooLong
+                        })?;
                         debug_files.push(file_path.clone());
                         file_to_idx.insert(file_path.clone(), idx);
                         idx
@@ -389,6 +388,11 @@ fn emit_instruction(
             out.extend_from_slice(&value.to_le_bytes());
         }
 
+        Instruction::PushUInt(value) => {
+            out.push(Opcode::PushUInt as u8);
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+
         Instruction::PushFloat(value) => {
             out.push(Opcode::PushFloat as u8);
             out.extend_from_slice(&value.to_le_bytes());
@@ -403,9 +407,9 @@ fn emit_instruction(
         // For the labels we can now resolve them using our label map.
         Instruction::Jump(label) => {
             let offset = resolve_label(line, label, labels)?;
-            push_int(
+            push_uint(
                 out,
-                i64::try_from_or_assemble_error(offset, |_| {
+                u64::try_from_or_assemble_error(offset, |_| {
                     AssembleError::InstructionOperandTooLarge
                 })?,
             );
@@ -414,9 +418,9 @@ fn emit_instruction(
 
         Instruction::JumpIfTrue(label) => {
             let offset = resolve_label(line, label, labels)?;
-            push_int(
+            push_uint(
                 out,
-                i64::try_from_or_assemble_error(offset, |_| {
+                u64::try_from_or_assemble_error(offset, |_| {
                     AssembleError::InstructionOperandTooLarge
                 })?,
             );
@@ -425,9 +429,9 @@ fn emit_instruction(
 
         Instruction::JumpIfFalse(label) => {
             let offset = resolve_label(line, label, labels)?;
-            push_int(
+            push_uint(
                 out,
-                i64::try_from_or_assemble_error(offset, |_| {
+                u64::try_from_or_assemble_error(offset, |_| {
                     AssembleError::InstructionOperandTooLarge
                 })?,
             );
@@ -436,9 +440,9 @@ fn emit_instruction(
 
         Instruction::Try(label) => {
             let offset = resolve_label(line, label, labels)?;
-            push_int(
+            push_uint(
                 out,
-                i64::try_from_or_assemble_error(offset, |_| {
+                u64::try_from_or_assemble_error(offset, |_| {
                     AssembleError::InstructionOperandTooLarge
                 })?,
             );
@@ -453,9 +457,9 @@ fn emit_instruction(
                     name: name.clone(),
                 },
             )?;
-            push_int(
+            push_uint(
                 out,
-                i64::try_from_or_assemble_error(idx, |_| {
+                u64::try_from_or_assemble_error(idx, |_| {
                     AssembleError::InstructionOperandTooLarge
                 })?,
             );
@@ -469,9 +473,9 @@ fn emit_instruction(
                     name: name.clone(),
                 },
             )?;
-            push_int(
+            push_uint(
                 out,
-                i64::try_from_or_assemble_error(idx, |_| {
+                u64::try_from_or_assemble_error(idx, |_| {
                     AssembleError::InstructionOperandTooLarge
                 })?,
             );
@@ -488,9 +492,9 @@ fn emit_instruction(
                         line,
                         name: name.clone(),
                     })?;
-            push_int(
+            push_uint(
                 out,
-                i64::try_from_or_assemble_error(idx, |_| {
+                u64::try_from_or_assemble_error(idx, |_| {
                     AssembleError::InstructionOperandTooLarge
                 })?,
             );
@@ -501,12 +505,12 @@ fn emit_instruction(
     Ok(())
 }
 
-/// Emit a `push.int` instruction with the given value into the output
+/// Emit a `push.uint` instruction with the given value into the output
 ///
 /// This is a helper used by instructions that need to push an operand
-/// before emitting their opcode
-fn push_int(out: &mut Vec<u8>, value: i64) {
-    out.push(Opcode::PushInt as u8);
+/// before emitting their opcode, such as for indices
+fn push_uint(out: &mut Vec<u8>, value: u64) {
+    out.push(Opcode::PushUInt as u8);
     out.extend_from_slice(&value.to_le_bytes());
 }
 
@@ -557,13 +561,13 @@ impl TryFromOrAssembleError<usize> for u32 {
     }
 }
 
-impl TryFromOrAssembleError<usize> for i64 {
+impl TryFromOrAssembleError<usize> for u64 {
     type Error = TryFromIntError;
 
     fn try_from_or_assemble_error<T: Fn(Self::Error) -> AssembleError>(
         value: usize,
         err: T,
     ) -> Result<Self, AssembleError> {
-        i64::try_from(value).map_err(err)
+        u64::try_from(value).map_err(err)
     }
 }

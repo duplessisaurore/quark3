@@ -4,8 +4,7 @@
 //! a Quark3 `ParsedFile`.
 
 use core::{
-    num::TryFromIntError,
-    ops::{Deref, DerefMut},
+    array::TryFromSliceError, num::TryFromIntError, ops::{Deref, DerefMut}
 };
 
 use alloc::{format, string::String, vec::Vec};
@@ -25,6 +24,10 @@ pub enum DisassembleError {
 
     /// An offset value was invalid
     InvalidOffset { error: TryFromIntError },
+
+    /// The value trying to be read from the stream
+    /// at the cursor is invalid
+    InvalidConversion { error: TryFromSliceError }
 }
 
 pub struct FunctionedDisassembleError {
@@ -55,6 +58,12 @@ impl core::fmt::Display for FunctionedDisassembleError {
                     "function {function}: offset value could not be properly converted to offset due to error: `{error}`"
                 )
             }
+            DisassembleError::InvalidConversion { error } => {
+                write!(
+                    f,
+                    "function {function}: offset value could not be properly converted to value due to error: `{error}`"
+                )    
+            },
         }
     }
 }
@@ -230,16 +239,15 @@ fn collect_label_targets(stream: &[u8]) -> Result<HashSet<usize>, DisassembleErr
         let operand_size = opcode.operand_size() as usize;
         cursor += 1;
 
-        if opcode == Opcode::PushInt && cursor + 8 < stream.len() {
+        if opcode == Opcode::PushUInt && cursor + 8 < stream.len() {
             // Read the offset we are jumping to
-            let value = read_i64(stream, cursor);
+            let value = read_u64(stream, cursor)?;
 
             // Try read the next opcode as one that "jumps" to a label
             // so this would be a "multi-instruction" instruction
             let next_opcode = Opcode::try_from(stream[cursor + 8]).ok();
             if let Some(next) = next_opcode
                 && is_label_opcode(next)
-                && value >= 0
             {
                 targets.insert(usize::try_from_or_disassemble_error(value)?);
             }
@@ -323,8 +331,8 @@ fn decode_statements(
         cursor += 1;
 
         match opcode {
-            Opcode::PushInt => {
-                let value = read_i64(stream, cursor);
+            Opcode::PushUInt => {
+                let value = read_u64(stream, cursor)?;
                 cursor += 8;
 
                 // Peek at the next opcode to see if this is a multi-instruction
@@ -404,11 +412,17 @@ fn decode_statements(
                     }
                 }
 
-                // Plain PushInt
-                statements.push(Statement::Instruction(Instruction::PushInt(value), 0));
+                // Plain PushUInt
+                statements.push(Statement::Instruction(Instruction::PushUInt(value), 0));
             }
 
             // Reoutput the constant emitting instructions
+            Opcode::PushInt => {
+                let value = read_i64(stream, cursor)?;
+                cursor += 8;
+                statements.push(Statement::Instruction(Instruction::PushInt(value), 0));
+            }
+
             Opcode::PushBool => {
                 let value = stream
                     .get(cursor)
@@ -420,7 +434,7 @@ fn decode_statements(
 
             #[cfg(feature = "floats")]
             Opcode::PushFloat => {
-                let value = read_f64(stream, cursor);
+                let value = read_f64(stream, cursor)?;
                 cursor += 8;
                 statements.push(Statement::Instruction(Instruction::PushFloat(value), 0));
             }
@@ -444,16 +458,23 @@ fn is_label_opcode(opcode: Opcode) -> bool {
 }
 
 /// Reads an i64 (lepton3 int) from the instruction stream
-fn read_i64(stream: &[u8], cursor: usize) -> i64 {
-    let bytes: [u8; 8] = stream[cursor..cursor + 8].try_into().unwrap();
-    i64::from_le_bytes(bytes)
+fn read_i64(stream: &[u8], cursor: usize) -> Result<i64, DisassembleError> {
+    let bytes: [u8; 8] = stream[cursor..cursor + 8].try_into().map_err(|err| DisassembleError::InvalidConversion { error: err })?;
+    Ok(i64::from_le_bytes(bytes))
 }
+
+/// Reads an u64 (lepton3 uint) from the instruction stream
+fn read_u64(stream: &[u8], cursor: usize) -> Result<u64, DisassembleError> {
+    let bytes: [u8; 8] = stream[cursor..cursor + 8].try_into().map_err(|err| DisassembleError::InvalidConversion { error: err })?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
 
 /// Reads an f64 (lepton3 float) from the instruction stream
 #[cfg(feature = "floats")]
-fn read_f64(stream: &[u8], cursor: usize) -> f64 {
-    let bytes: [u8; 8] = stream[cursor..cursor + 8].try_into().unwrap();
-    f64::from_le_bytes(bytes)
+fn read_f64(stream: &[u8], cursor: usize) -> Result<f64, DisassembleError> {
+    let bytes: [u8; 8] = stream[cursor..cursor + 8].try_into().map_err(|err| DisassembleError::InvalidConversion { error: err })?;
+    Ok(f64::from_le_bytes(bytes))
 }
 
 impl<'name> From<HashMap<usize, &'name str>> for FunctionMap<'name> {
@@ -516,21 +537,21 @@ impl DerefMut for LabelMap<'_> {
     }
 }
 
-/// Try convert an i64 (Lepton3 image) to another value (offset into a stream or something)
+/// Try convert an `u64` (Lepton3 image) to another value (offset into a stream or something)
 /// with the failure case returning a `DisassembleError`
-trait TryI64ToSelfWithDisassembleError: Sized {
-    /// This function should try convert to this type from an i64
+trait TryU64ToSelfWithDisassembleError: Sized {
+    /// This function should try convert to this type from an `u64`
     /// or return a `DisassembleError` if it cannot be succesfully converted
     ///
     /// # Errors
     ///
-    /// This should error with a `DisassembleError` if the `i64` value cannot
+    /// This should error with a `DisassembleError` if the `u64` value cannot
     /// be cast safely and successfully to the Self type
-    fn try_from_or_disassemble_error(other: i64) -> Result<Self, DisassembleError>;
+    fn try_from_or_disassemble_error(other: u64) -> Result<Self, DisassembleError>;
 }
 
-impl TryI64ToSelfWithDisassembleError for usize {
-    fn try_from_or_disassemble_error(other: i64) -> Result<Self, DisassembleError> {
+impl TryU64ToSelfWithDisassembleError for usize {
+    fn try_from_or_disassemble_error(other: u64) -> Result<Self, DisassembleError> {
         usize::try_from(other).map_err(|err| DisassembleError::InvalidOffset { error: err })
     }
 }
