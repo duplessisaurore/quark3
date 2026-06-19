@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "quark3"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "quark_asm",
  "quark_debug",
@@ -233,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "quark_asm"
-version = "1.1.0"
+version = "2.0.0"
 dependencies = [
  "hashbrown",
  "lepton3",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "quark_disasm"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "hashbrown",
  "lepton3",
@@ -263,14 +263,14 @@ dependencies = [
 
 [[package]]
 name = "quark_map"
-version = "1.1.0"
+version = "2.0.0"
 dependencies = [
  "lepton3",
 ]
 
 [[package]]
 name = "quark_std"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "clap",
  "lepton3",
@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "quark_std_disasm"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "clap",
  "lepton3",
