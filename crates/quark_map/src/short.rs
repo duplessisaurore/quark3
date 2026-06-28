@@ -61,6 +61,7 @@ map_opcode! {
     "ost" = Opcode::ObjectSet,
     "ogt" = Opcode::ObjectGet,
     "oln" = Opcode::ObjectLength,
+    "ott" = Opcode::ObjectTypeTag,
     "teq" = Opcode::TagEq,
     "tnw" = Opcode::TagNew,
     "cap" = Opcode::CallCap,

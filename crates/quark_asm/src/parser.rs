@@ -90,6 +90,9 @@ pub enum Instruction {
 
     /// object.new <object name>
     ObjectNew(String),
+
+    /// object.type.tag <object name>
+    ObjectTypeTag(String),
 }
 
 impl Instruction {
@@ -115,7 +118,8 @@ impl Instruction {
             | Self::Try(_)
             | Self::Call(_)
             | Self::TailCall(_)
-            | Self::ObjectNew(_) => 10,
+            | Self::ObjectNew(_) 
+            | Self::ObjectTypeTag(_) => 10,
 
             // Emits just the opcode, only one byte
             Self::Plain(_) => 1,
@@ -424,6 +428,11 @@ fn parse_instruction(line: usize, tokens: &[&str]) -> Result<Instruction, LinedP
             let name = require_arg(line, long_from_opcode(&Opcode::ObjectNew), tokens, 1)?;
             Ok(Instruction::ObjectNew(name.to_string()))
         }
+        Opcode::ObjectTypeTag => {
+            let name = require_arg(line, long_from_opcode(&Opcode::ObjectTypeTag), tokens, 1)?;
+            Ok(Instruction::ObjectTypeTag(name.to_string()))
+        }
+
         _ => Ok(Instruction::Plain(opcode)),
     }
 }

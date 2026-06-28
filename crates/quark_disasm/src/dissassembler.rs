@@ -410,6 +410,16 @@ fn decode_statements(
                                 .push(Statement::Instruction(Instruction::ObjectNew(name), 0));
                             continue;
                         }
+                        Opcode::ObjectTypeTag => {
+                            cursor += 1;
+                            let name = lookup_object_name(
+                                &usize::try_from_or_disassemble_error(value)?,
+                                obj_names,
+                            );
+                            statements
+                                .push(Statement::Instruction(Instruction::ObjectTypeTag(name), 0));
+                            continue;
+                        }
                         _ => {}
                     }
                 }

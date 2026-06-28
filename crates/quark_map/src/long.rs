@@ -61,6 +61,7 @@ map_opcode! {
     "object.set" = Opcode::ObjectSet,
     "object.get" = Opcode::ObjectGet,
     "object.length" = Opcode::ObjectLength,
+    "object.type.tag" = Opcode::ObjectTypeTag,
     "tag.equal" = Opcode::TagEq,
     "tag.new" = Opcode::TagNew,
     "call.cap" = Opcode::CallCap,

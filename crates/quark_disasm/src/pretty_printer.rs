@@ -56,6 +56,7 @@ pub fn pretty_print(source: impl Display, file: &ParsedFile) -> String {
                         Instruction::Call(name) => format!("call {name}"),
                         Instruction::TailCall(name) => format!("tail.call {name}"),
                         Instruction::ObjectNew(name) => format!("object.new {name}"),
+                        Instruction::ObjectTypeTag(name) => format!("object.type.tag {name}"),
                         Instruction::PushUInt(v) => format!("push.uint {v}"),
                         Instruction::PushFunctionIndex(name) => format!("@push.fn {name}"),
                     };

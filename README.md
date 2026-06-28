@@ -349,6 +349,7 @@ go_return:
 | object.set | ost | ObjectSet |
 | object.get | ogt | ObjectGet |
 | object.length | oln | ObjectLength |
+| object.type.tag | ott | ObjectTypeTag |
 
 For the `ObjectNew` instruction, the object is not referred to by its index, but by the sugared \<name> defined by the `@object` directive. This is inlined with the opcode as follows:
 

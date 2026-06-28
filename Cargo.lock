@@ -65,12 +65,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
-name = "cfg-if"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
-
-[[package]]
 name = "clap"
 version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -164,8 +158,8 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "lepton3"
-version = "2.0.0"
-source = "git+https://github.com/duplessisaurore/lepton3#d4b1ba51f134fc014f46595089c5b93aba80373f"
+version = "3.1.0"
+source = "git+https://github.com/duplessisaurore/lepton3#b269a8a0b8546171cfd13e6f016e5f93cdcae8d0"
 dependencies = [
  "lepton_image",
  "lepton_opcodes",
@@ -175,22 +169,21 @@ dependencies = [
 [[package]]
 name = "lepton_image"
 version = "1.1.1"
-source = "git+https://github.com/duplessisaurore/lepton3#d4b1ba51f134fc014f46595089c5b93aba80373f"
+source = "git+https://github.com/duplessisaurore/lepton3#b269a8a0b8546171cfd13e6f016e5f93cdcae8d0"
 dependencies = [
  "lepton_opcodes",
 ]
 
 [[package]]
 name = "lepton_opcodes"
-version = "2.0.0"
-source = "git+https://github.com/duplessisaurore/lepton3#d4b1ba51f134fc014f46595089c5b93aba80373f"
+version = "2.1.0"
+source = "git+https://github.com/duplessisaurore/lepton3#b269a8a0b8546171cfd13e6f016e5f93cdcae8d0"
 
 [[package]]
 name = "lepton_vm"
-version = "2.0.0"
-source = "git+https://github.com/duplessisaurore/lepton3#d4b1ba51f134fc014f46595089c5b93aba80373f"
+version = "3.1.0"
+source = "git+https://github.com/duplessisaurore/lepton3#b269a8a0b8546171cfd13e6f016e5f93cdcae8d0"
 dependencies = [
- "cfg-if",
  "lepton_image",
  "lepton_opcodes",
 ]
@@ -290,9 +283,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.45"
+version = "1.0.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
+checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
 dependencies = [
  "proc-macro2",
 ]
