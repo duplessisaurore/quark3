@@ -513,7 +513,7 @@ fn emit_instruction(
                     AssembleError::InstructionOperandTooLarge
                 })?,
             );
-        },
+        }
     }
 
     Ok(())

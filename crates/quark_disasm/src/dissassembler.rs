@@ -4,7 +4,9 @@
 //! a Quark3 `ParsedFile`.
 
 use core::{
-    array::TryFromSliceError, num::TryFromIntError, ops::{Deref, DerefMut}
+    array::TryFromSliceError,
+    num::TryFromIntError,
+    ops::{Deref, DerefMut},
 };
 
 use alloc::{format, string::String, vec::Vec};
@@ -27,7 +29,7 @@ pub enum DisassembleError {
 
     /// The value trying to be read from the stream
     /// at the cursor is invalid
-    InvalidConversion { error: TryFromSliceError }
+    InvalidConversion { error: TryFromSliceError },
 }
 
 pub struct FunctionedDisassembleError {
@@ -62,8 +64,8 @@ impl core::fmt::Display for FunctionedDisassembleError {
                 write!(
                     f,
                     "function {function}: offset value could not be properly converted to value due to error: `{error}`"
-                )    
-            },
+                )
+            }
         }
     }
 }
@@ -459,21 +461,26 @@ fn is_label_opcode(opcode: Opcode) -> bool {
 
 /// Reads an i64 (lepton3 int) from the instruction stream
 fn read_i64(stream: &[u8], cursor: usize) -> Result<i64, DisassembleError> {
-    let bytes: [u8; 8] = stream[cursor..cursor + 8].try_into().map_err(|err| DisassembleError::InvalidConversion { error: err })?;
+    let bytes: [u8; 8] = stream[cursor..cursor + 8]
+        .try_into()
+        .map_err(|err| DisassembleError::InvalidConversion { error: err })?;
     Ok(i64::from_le_bytes(bytes))
 }
 
 /// Reads an u64 (lepton3 uint) from the instruction stream
 fn read_u64(stream: &[u8], cursor: usize) -> Result<u64, DisassembleError> {
-    let bytes: [u8; 8] = stream[cursor..cursor + 8].try_into().map_err(|err| DisassembleError::InvalidConversion { error: err })?;
+    let bytes: [u8; 8] = stream[cursor..cursor + 8]
+        .try_into()
+        .map_err(|err| DisassembleError::InvalidConversion { error: err })?;
     Ok(u64::from_le_bytes(bytes))
 }
-
 
 /// Reads an f64 (lepton3 float) from the instruction stream
 #[cfg(feature = "floats")]
 fn read_f64(stream: &[u8], cursor: usize) -> Result<f64, DisassembleError> {
-    let bytes: [u8; 8] = stream[cursor..cursor + 8].try_into().map_err(|err| DisassembleError::InvalidConversion { error: err })?;
+    let bytes: [u8; 8] = stream[cursor..cursor + 8]
+        .try_into()
+        .map_err(|err| DisassembleError::InvalidConversion { error: err })?;
     Ok(f64::from_le_bytes(bytes))
 }
 
