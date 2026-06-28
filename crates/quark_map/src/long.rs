@@ -47,8 +47,10 @@ map_opcode! {
     "tail.call" = Opcode::TailCall,
     "return" = Opcode::Return,
     "abort" = Opcode::Abort,
-    "load" = Opcode::Load,
-    "store" = Opcode::Store,
+    "load.local" = Opcode::Load,
+    "store.local" = Opcode::Store,
+    "load.global" = Opcode::LoadGlobal,
+    "store.global" = Opcode::StoreGlobal,
     "array.new" = Opcode::ArrayNew,
     "array.cons" = Opcode::ArrayCons,
     "array.head" = Opcode::ArrayHead,
@@ -88,4 +90,5 @@ map_opcode! {
     "int.to.uint" = Opcode::IntToUInt,
     "uint.to.int" = Opcode::UIntToInt,
     "type.of" = Opcode::TypeOf,
+    "clone" = Opcode::Clone
 }

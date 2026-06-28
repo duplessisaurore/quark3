@@ -47,8 +47,10 @@ map_opcode! {
     "tcl" = Opcode::TailCall,
     "ret" = Opcode::Return,
     "abt" = Opcode::Abort,
-    "lod" = Opcode::Load,
-    "ste" = Opcode::Store,
+    "lol" = Opcode::Load,
+    "stl" = Opcode::Store,
+    "log" = Opcode::LoadGlobal,
+    "stg" = Opcode::StoreGlobal,
     "anw" = Opcode::ArrayNew,
     "acs" = Opcode::ArrayCons,
     "ahd" = Opcode::ArrayHead,
@@ -88,4 +90,5 @@ map_opcode! {
     "itu" = Opcode::IntToUInt,
     "uti" = Opcode::UIntToInt,
     "tof" = Opcode::TypeOf,
+    "cln" = Opcode::Clone
 }

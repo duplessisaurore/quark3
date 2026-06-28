@@ -321,12 +321,14 @@ go_return:
     return
 ```
 
-### Locals
+### Locals & Globals
 
 | Long Form | Short Form | Opcode |
 |-----------|------------|---------|
-| load | lod | Load |
-| store | ste | Store |
+| load.local | lol | Load |
+| store.local | stl | Store |
+| load.global | log | LoadGlobal |
+| store.global | stg | StoreGlobal |
 
 ### Arrays
 
@@ -416,6 +418,12 @@ object.new Nothing
 | int.to.uint | itu | IntToUInt |
 | uint.to.int | uti | UIntToInt |
 | type.of | tof | TypeOf |
+
+### Heap Operations
+
+| Long Form | Short Form | Opcode |
+|-----------|------------|---------|
+| clone | cln | Clone |
 
 <a name="quark3-asm-disasm"></a>
 ## 🌌 Assembly/Disassembly
