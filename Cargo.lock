@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "quark3"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "quark_asm",
  "quark_debug",
@@ -233,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "quark_asm"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hashbrown",
  "lepton3",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "quark_disasm"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hashbrown",
  "lepton3",

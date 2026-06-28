@@ -77,6 +77,11 @@ pub enum Instruction {
     /// try <label>
     Try(String),
 
+    /// push.uint <function name>
+    /// as in the index of the function
+    /// with that name
+    PushFunctionIndex(String),
+
     /// call <function name>
     Call(String),
 
@@ -96,7 +101,10 @@ impl Instruction {
     pub fn byte_size(&self) -> usize {
         match self {
             // Emits opcode and constant
-            Self::PushInt(_) | Self::PushUInt(_) | Self::PushFloat(_) => 9,
+            Self::PushInt(_)
+            | Self::PushUInt(_)
+            | Self::PushFloat(_)
+            | Self::PushFunctionIndex(_) => 9,
             Self::PushBool(_) => 2,
 
             // Emits a `push.uint` (9 bytes) for the operand
@@ -129,6 +137,9 @@ pub enum ParseError {
 
     /// A loc was encountered outside of a function
     LocOutsideFunction,
+
+    /// A pushfn was encountered outside of a function
+    PushFnOutsideFunction,
 
     /// A required argument was missing
     MissingArgument { directive: String },
@@ -164,6 +175,9 @@ impl Display for ParseError {
             }
             Self::InvalidArgument { expected, got } => {
                 write!(f, "expected `{expected}`, got `{got}`")
+            }
+            Self::PushFnOutsideFunction => {
+                write!(f, "push.fn outside of function")
             }
         }
     }
@@ -246,6 +260,21 @@ pub fn parse(input: &str) -> Result<ParsedFile, LinedParseError> {
                     clean_file,
                     s_line as usize,
                     s_col as usize,
+                ));
+            }
+
+            // @push.fn <function_name>
+            // Attaches a push.uint at the current position that pushes
+            // that function's id
+            ["@push.fn", function_name] => {
+                let func = current_function
+                    .as_mut()
+                    .ok_or(ParseError::PushFnOutsideFunction.with_line(line_number))?;
+
+                // This is sugar for PushFunctionIndex instruction
+                func.body.push(Statement::Instruction(
+                    Instruction::PushFunctionIndex(function_name.to_string()),
+                    line_number,
                 ));
             }
 
