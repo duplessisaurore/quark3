@@ -16,6 +16,7 @@
 - [<code>🔭 Community</code>](#community)
 - [<code>🔬 Quark3 Language</code>](#quark3-language)
 - [<code>🌌 Assembly/Disassembly</code>](#quark3-asm-disasm)
+- [<code>🔧 Boson3 Preprocessor</code>](#boson3-preprocessor)
 - [<code>🧾 License</code>](#license)
 - [<code>🎓 Acknowledgments</code>](#acknowledgements)
 
@@ -81,11 +82,11 @@ This directive defines a new entry in the **object table** of the image.
 
 @fn new_point 2 2
 
-    // Load arguments to function
+    // load.local arguments to function
     push.uint 0
-    load
+    load.local
     push.uint 1
-    load
+    load.local
 
     // Make Point (two fields) from the locals
     object.new Point
@@ -112,11 +113,11 @@ This directive defines a new entry in the **function table** of the image.
 // A function that takes two arguments
 @fn my_function 2 2
 
-    // Load arguments to function into stack
+    // load.local arguments to function into stack
     push.uint 0
-    load
+    load.local
     push.uint 1
-    load
+    load.local
     
     return 
 ```
@@ -138,9 +139,9 @@ This directive defines a new entry in the **debug info** of the image.
 ```
 @fn new_point 2 2
     push.uint 0
-    load
+    load.local
     push.uint 1
-    load
+    load.local
 
     // These instructions (matches closest loc)
     // came from "my_file.qk3" at line 25 col 0
@@ -166,7 +167,7 @@ into some function's body, for example:
 @fn count_down 1 1
 
     push.uint 0
-    load
+    load.local
 
     push.int 0
     int.equal
@@ -174,7 +175,7 @@ into some function's body, for example:
     jump.if.true done
 
     push.uint 0
-    load
+    load.local
 
     push.int 1
     int.sub
@@ -435,6 +436,175 @@ This assembles the `Quark3` textual source code into a `Lepton3` image. It optio
 The advantages of `Quark3` being so close to the `Lepton3` bytecode, without much sugar on top of just being a literal textual map to the image is that we can easily **disassemble** the image back into `Quark3` source code (excl. whitespace and comments).
 
 This disassembler is provided in binary form by the `quark_std_disasm` crate, similar to `quark_std`. For proper name mapping during disassembly the produce source map can be provided to the disassembler, else the disassembler will choose generic names for all named elements (objects, functions and labels).
+
+<a name="boson3-preprocessor"></a>
+## 🔧 Boson3 Preprocessor
+
+Quark3 is very low level and unfriendly. The `Boson3` preprocessor aims to provide a layer above `quark3` which enables for programming in `quark3` at a usable level.
+
+These are the things provided by `boson3` above `quark3`:
+
+### Locals and Global naming
+
+```
+// This names the slot 0 global under the alias of <counter>
+@global counter 0
+
+// We can then refer to it in a special inline load.global
+@fn my_fn 0 0
+    load.global counter
+
+// This desugars to
+@fn my_fn 0 0
+    push.uint 0
+    load.global
+```
+
+```
+// This names the locals as <x, y>
+@fn my_fn 2 2 (x, y)
+    load.local x
+    store.local y
+```
+
+### If statements
+
+```
+@fn my_fn 2 2 (x, y)
+    load.local x
+
+    if
+        blah blah blah
+    else
+        blah blah blah
+    end
+
+    blah blah blah
+```
+
+This desugars to
+
+```
+@fn my_fn 2 2 (x, y)
+    load.local x
+    
+    jump.if.false __if_1_else
+    ...true...
+    jump __if_1_end
+
+__if_1_else:
+        ...false...
+__if_1_end:
+
+    blah blah blah
+```
+
+The else is optional.
+
+### Loop
+
+```
+@fn my_fn 2 2
+    loop
+        ...body...
+    end
+
+    blah blah blah
+```
+
+This desugars to 
+
+```
+@fn my_fn 2 2
+__loop_1_start:
+    ...body...
+    jump __loop_1_start
+
+__loop_1_end:
+
+    blah blah blah
+```
+
+### Object field naming
+
+```
+// You can name object fields now!
+@object Point 2 (x, y)
+```
+
+This can be used like:
+
+```
+object.get Point.x
+object.set Point.y
+```
+
+Which just desugars to:
+
+```
+push.uint 0
+object.get
+
+push.uint 1
+swap
+object.set
+```
+
+### Named capabilities
+
+Like globals:
+
+```
+@capability uart_write 0
+@capability gpio_set 1
+```
+
+This lets us use:
+
+```
+call.cap uart_write
+```
+
+Which desugars to
+
+```
+push.uint 0
+call.cap
+```
+
+### Try Catch
+
+Try catch blocks exist too!
+
+```
+@fn my_fn 2 2
+    try
+        ...risky...
+    catch
+        ...handler...
+    end
+
+    blah blah blah
+```
+
+desguars to:
+
+```
+@fn my_fn 2 2
+
+    try __try_1_handler
+    ...risky...
+    end.try
+    jump __try_1_end
+
+__try_1_handler:
+    ...handler...
+
+__try_1_end:
+    blah blah blah
+```
+
+
 
 <a name="license"></a>
 ## 🧾 License
