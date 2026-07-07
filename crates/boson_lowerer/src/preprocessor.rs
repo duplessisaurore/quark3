@@ -1,6 +1,7 @@
-/// The actual preprocessor itself,
-/// this runs all the preprocessing functions and lowers
-/// elements down to `Quark3`.
+//! The actual preprocessor itself,
+//! this runs all the preprocessing functions and lowers
+//! elements down to `Quark3`.
+
 use std::collections::HashMap;
 
 use crate::errors::{LoweringError, LoweringErrorKind};

@@ -13,8 +13,12 @@
 
 use std::error::Error;
 
+pub mod linker;
+
 use clap::Parser;
 use std::{fs, path::PathBuf, process};
+
+use crate::linker::{LinkableFile, Linker};
 
 #[derive(Parser)]
 #[command(
@@ -26,6 +30,7 @@ struct Cli {
     input: Vec<PathBuf>,
 
     /// Output Quark3 source file
+    #[arg(short, long)]
     output: PathBuf,
 }
 
@@ -36,12 +41,47 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output_path = &cli.output;
 
     // Read source files
-    let source_files = input_paths.iter().map(|input_path| {
-        fs::read_to_string(input_path).unwrap_or_else(|e| {
-            eprintln!("error reading {}: {e}", input_path.display());
-            process::exit(1);
+    let source_files = input_paths
+        .iter()
+        .map(|input_path| {
+            let file_contents = fs::read_to_string(input_path).unwrap_or_else(|e| {
+                eprintln!("error reading {}: {e}", input_path.display());
+                process::exit(1);
+            });
+
+            // Resolve the input path down.
+            let file_name = input_path
+                .file_name()
+                .unwrap_or_else(|| {
+                    eprintln!("unable to simplify input path {}", input_path.display());
+                    process::exit(1);
+                })
+                .to_string_lossy()
+                .to_string();
+
+            LinkableFile {
+                file_contents,
+                file_name,
+            }
         })
-    }).collect::<Vec<_>>();
+        .collect::<Vec<_>>();
+
+    // Link input sources
+    let linker = 
+        Linker::new(source_files);
+    let linked = linker.link();
+
+    // Write output file
+    fs::write(output_path, linked).unwrap_or_else(|e| {
+        eprintln!("error writing {}: {e}", output_path.display());
+        process::exit(1);
+    });
+
+    println!(
+        "gluon3 linked {:?} -> {}",
+        input_paths,
+        output_path.display()
+    );
 
     Ok(())
 }
