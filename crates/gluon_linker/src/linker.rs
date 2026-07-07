@@ -205,7 +205,7 @@ impl Linker {
                         let mut new_directive = (*remap_directive).to_vec();
                         new_directive[1] = &remapped_name;
 
-                        output.push(format!("{}", new_directive.join(" ")));
+                        output.push(new_directive.join(" ").to_string());
                     }
 
                     // globals remapping
