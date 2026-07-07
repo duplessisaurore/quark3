@@ -20,7 +20,7 @@ pub enum LinkerErrorKind {
 /// of input Boson3 source files that import eachother
 /// out into one final Boson3 file
 pub struct Linker {
-    sources: HashMap<String, String>,
+    sources: HashMap<(String, String), String>,
 }
 
 /// The linkable file, this contains
@@ -34,6 +34,7 @@ pub struct Linker {
 pub struct LinkableFile {
     pub file_contents: String,
     pub file_name: String,
+    pub full_file_name: String,
 }
 
 impl Linker {
@@ -42,7 +43,10 @@ impl Linker {
         let mut source_map = HashMap::new();
 
         for source in sources {
-            source_map.insert(source.file_name, source.file_contents);
+            source_map.insert(
+                (source.full_file_name, source.file_name),
+                source.file_contents,
+            );
         }
 
         Self {
@@ -55,7 +59,7 @@ impl Linker {
     pub fn link(self) -> Result<String, LinkerError> {
         let mut output = Vec::new();
 
-        for (file, source) in self.sources.into_iter() {
+        for ((long_name, file), source) in self.sources.into_iter() {
             let mut globals_map = HashMap::new();
             let mut function_map = HashMap::new();
             let mut capability_map = HashMap::new();
@@ -64,9 +68,7 @@ impl Linker {
             let namespace = extract_namespace(&file);
 
             // First pass, gather all renamed elements
-            for (line_number, line) in source.lines().enumerate() {
-                let line_number = line_number + 1;
-
+            for line in source.lines() {
                 // Strip the comment from a line and ignore if empty, this means
                 // we only parse actual tokens
                 let line = strip_comment(line).trim();
@@ -124,7 +126,7 @@ impl Linker {
                     }
 
                     // Non-remappable things
-                    other => {}
+                    _ => {}
                 }
             }
 
@@ -206,13 +208,111 @@ impl Linker {
                         output.push(format!("{}", new_directive.join(" ")));
                     }
 
+                    // globals remapping
+                    [
+                        op @ ("store.global" | "load.global" | "log" | "stg"),
+                        global,
+                    ] => {
+                        let new_global_name = globals_map.get(*global).ok_or_else(|| {
+                            LinkerErrorKind::UndefinedName {
+                                name: global.to_string(),
+                            }
+                            .with_line(line_number)
+                        })?;
+
+                        push_out(
+                            &long_name,
+                            format!("{op} {new_global_name}"),
+                            line_number,
+                            &mut output,
+                        );
+                    }
+
+                    // object remapping
+                    [op @ ("object.new" | "onw"), object] => {
+                        let new_object_name = object_map.get(*object).ok_or_else(|| {
+                            LinkerErrorKind::UndefinedName {
+                                name: object.to_string(),
+                            }
+                            .with_line(line_number)
+                        })?;
+
+                        push_out(
+                            &long_name,
+                            format!("{op} {new_object_name}"),
+                            line_number,
+                            &mut output,
+                        );
+                    }
+
+                    [op @ ("object.set" | "ost" | "object.get" | "ogt"), object] => {
+                        // We the field and object name (2 elements)
+                        let split_access = object.split(".").collect::<Vec<_>>();
+
+                        // Fail in lowering.
+                        if split_access.len() != 2 {
+                            continue;
+                        }
+
+                        let object_name = split_access[0];
+
+                        let new_object_name = object_map.get(object_name).ok_or_else(|| {
+                            LinkerErrorKind::UndefinedName {
+                                name: object_name.to_string(),
+                            }
+                            .with_line(line_number)
+                        })?;
+
+                        push_out(
+                            &long_name,
+                            format!("{op} {new_object_name}"),
+                            line_number,
+                            &mut output,
+                        );
+                    }
+
+                    // function remapping
+                    [op @ ("call" | "cal" | "tail.call" | "tcl"), function] => {
+                        let new_function_name = function_map.get(*function).ok_or_else(|| {
+                            LinkerErrorKind::UndefinedName {
+                                name: function.to_string(),
+                            }
+                            .with_line(line_number)
+                        })?;
+
+                        push_out(
+                            &long_name,
+                            format!("{op} {new_function_name}"),
+                            line_number,
+                            &mut output,
+                        );
+                    }
+
+                    // capabilities remapping
+                    [op @ ("call.cap" | "cap"), capability] => {
+                        let new_capability_name =
+                            capability_map.get(*capability).ok_or_else(|| {
+                                LinkerErrorKind::UndefinedName {
+                                    name: capability.to_string(),
+                                }
+                                .with_line(line_number)
+                            })?;
+
+                        push_out(
+                            &long_name,
+                            format!("{op} {new_capability_name}"),
+                            line_number,
+                            &mut output,
+                        );
+                    }
+
                     // Directives cant have @loc attached
                     directive if directive.iter().any(|tok| tok.starts_with("@")) => {
                         output.push(directive.join(" "))
                     }
 
                     // Non-remappable things
-                    other => push_out(&file, other.join(" "), line_number, &mut output),
+                    other => push_out(&long_name, other.join(" "), line_number, &mut output),
                 }
             }
         }
@@ -269,8 +369,7 @@ impl Display for LinkerError {
 /// Inserts a @loc directive at the current position with the source
 /// being the original boson3 file
 fn insert_loc(filename: &str, line_number: usize, output: &mut Vec<String>) {
-    output
-        .push(format!("@loc {} {line_number} 0", filename))
+    output.push(format!("@loc {} {line_number} 0", filename))
 }
 
 fn push_out(file_name: &str, contents: String, line_number: usize, output: &mut Vec<String>) {
