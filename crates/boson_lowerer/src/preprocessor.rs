@@ -1,13 +1,12 @@
 /// The actual preprocessor itself,
 /// this runs all the preprocessing functions and lowers
 /// elements down to `Quark3`.
-
 use std::collections::HashMap;
 
-use crate::errors::LoweringError;
+use crate::errors::{LoweringError, LoweringErrorKind};
 
 /// The actual lowerer itself.
-/// 
+///
 /// This is responsible for doing all the desugaring
 /// and preprocessing in `Boson3`
 #[derive(Debug)]
@@ -41,7 +40,6 @@ pub struct BosonLowerer<'source> {
     out: Vec<String>,
 }
 
-
 /// A structured construct that is currently "open"
 #[derive(Debug)]
 enum Block {
@@ -74,15 +72,127 @@ impl<'source> BosonLowerer<'source> {
             locals: HashMap::new(),
             blocks: Vec::new(),
             source,
-            out: Vec::new()
+            out: Vec::new(),
         }
     }
 
     /// Lower a complete `Boson3` source file to `Quark3` source.
     pub fn lower(mut self) -> Result<String, LoweringError> {
+        // Collect all the global table elements into the `Lowerer`
+        self.collect()?;
+
         let mut text = self.out.join("\n");
         text.push('\n');
         Ok(text)
     }
 
+    /// The first part of the lowering process is collecting
+    /// all the easy global names that we can just replace easily
+    /// throughout the whole file
+    ///
+    /// These are the @global's, @capabilities and the @object fields.
+    fn collect(&mut self) -> Result<(), LoweringError> {
+        for (line_number, line) in self.source.lines().enumerate() {
+            let line_number = line_number + 1;
+
+            // Strip the comment from a line and ignore if empty, this means
+            // we only parse actual tokens
+            let line = strip_comment(line).trim();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+
+            match tokens.as_slice() {
+                // @global <name> <slot>
+                // Defines a new global slot for usage with load and store global
+                ["@global", name, slot] => {
+                    let name = name.to_string();
+                    let slot = parse_u64(line_number, slot)?;
+                    self.globals.insert(name, slot);
+                }
+
+                // @capability <name> <num>
+                // Defines a new capability with this alias that refers
+                // to the specific capability number
+                ["@capability", name, num] => {
+                    let name = name.to_string();
+                    let num = parse_u64(line_number, num)?;
+                    self.globals.insert(name, num);
+                }
+
+                // @object <name> <fields> (field_name, ...)
+                other if other.iter().any(|tok| tok.starts_with("@object")) => {
+                    // The @object, <name>, <fields> part are required, with an optional field_names
+                    // which this desugarer handles, so less than 4 means no field names.
+                    if other.len() < 4 {
+                        continue;
+                    };
+
+                    // Parse <name> <fields>
+                    let name = other[1];
+                    let field_count = parse_u64(line_number, other[2])?;
+
+                    // Remaining elements which are field names
+                    let fields = other[3..].join(" ");
+                    let field_names = fields
+                        .trim_prefix("(")
+                        .trim_suffix(")")
+                        .split(",")
+                        .collect::<Vec<_>>();
+
+                    // For a named object, we need to have all fields named.
+                    if (field_names.len() as u64) != field_count {
+                        return Err(LoweringErrorKind::InvalidNamedFieldsAmount {
+                            object_name: name.to_string(),
+                            fields_expected: field_count,
+                            fields_got: field_names.len() as u64,
+                        }
+                        .with_line(line_number));
+                    }
+
+                    // Create field map for this object.
+                    let mut field_map = HashMap::with_capacity(field_names.len());
+
+                    for (i, field_name) in field_names.iter().enumerate() {
+                        field_map.insert(field_name.to_string(), i as u64);
+                    }
+
+                    self.object_fields.insert(name.to_string(), field_map);
+                }
+
+                // Non-collectable things
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Strip a line comment from a line
+fn strip_comment(line: &str) -> &str {
+    if let Some(idx) = line.find("//") {
+        &line[..idx]
+    } else {
+        line
+    }
+}
+
+/// Parse a u64 from a string token
+///
+/// # Errors
+///
+/// This will error with a `LoweringError::InvalidArgument` if the
+/// string token cannot be successfully converted to a `u64`
+fn parse_u64(line: usize, token: &str) -> Result<u64, LoweringError> {
+    token.parse::<u64>().map_err(|_| {
+        LoweringErrorKind::InvalidArgument {
+            expected: "64-Bit Unsigned Integer".to_string(),
+            got: token.to_string(),
+        }
+        .with_line(line)
+    })
 }
