@@ -81,6 +81,14 @@ impl<'source> BosonLowerer<'source> {
         // Collect all the global table elements into the `Lowerer`
         self.collect()?;
 
+        // Lower all the lines out
+        self.lower_lines()?;
+
+        // Any blocks left over means we have an unclosed construct
+        if !self.blocks.is_empty() {
+            return Err(LoweringErrorKind::UnclosedConstruct.with_line(self.source.lines().count()));
+        }
+
         let mut text = self.out.join("\n");
         text.push('\n');
         Ok(text)
@@ -128,6 +136,7 @@ impl<'source> BosonLowerer<'source> {
                     // The @object, <name>, <fields> part are required, with an optional field_names
                     // which this desugarer handles, so less than 4 means no field names.
                     if other.len() < 4 {
+                        self.out.push(other.join(" "));
                         continue;
                     };
 
@@ -146,7 +155,7 @@ impl<'source> BosonLowerer<'source> {
                     // For a named object, we need to have all fields named.
                     if (field_names.len() as u64) != field_count {
                         return Err(LoweringErrorKind::InvalidNamedFieldsAmount {
-                            object_name: name.to_string(),
+                            name: name.to_string(),
                             fields_expected: field_count,
                             fields_got: field_names.len() as u64,
                         }
@@ -161,10 +170,105 @@ impl<'source> BosonLowerer<'source> {
                     }
 
                     self.object_fields.insert(name.to_string(), field_map);
+                    self.out.push(format!("@object {name} {field_count}"))
                 }
 
                 // Non-collectable things
                 _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Lowers each line in the input source file down into quark3.
+    ///
+    /// This relys on the fact that `collect` has already ran for collecting
+    /// things into the global tables.
+    fn lower_lines(&mut self) -> Result<(), LoweringError> {
+        for (line_number, line) in self.source.lines().enumerate() {
+            let line_number = line_number + 1;
+
+            // Strip the comment from a line and ignore if empty, this means
+            // we only parse actual tokens
+            let line = strip_comment(line).trim();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+
+            match tokens.as_slice() {
+                // @fn <name> <args> <locals> (field_name, ...)
+                function if function.iter().any(|tok| tok.starts_with("@fn")) => {
+                    // No matter what, encountering a function directive resets the locals table.
+                    self.locals.clear();
+
+                    // The @fn, <name>, <args>, <locals> part are required, with an optional field_names
+                    // which this desugarer handles, so less than 5 means no field names.
+                    if function.len() < 5 {
+                        self.out.push(function.join(" "));
+                        continue;
+                    };
+
+                    // Parse <name>, <args> and <locals>, since args shares locals
+                    let name = function[1];
+                    let args = function[2];
+                    let locals_count = parse_u64(line_number, function[3])?;
+
+                    // Remaining elements which are field names
+                    let fields = function[4..].join(" ");
+                    let field_names = fields
+                        .trim_prefix("(")
+                        .trim_suffix(")")
+                        .split(",")
+                        .collect::<Vec<_>>();
+
+                    // For a function we need to have all locals named.
+                    if (field_names.len() as u64) != locals_count {
+                        return Err(LoweringErrorKind::InvalidNamedFieldsAmount {
+                            name: name.to_string(),
+                            fields_expected: locals_count,
+                            fields_got: field_names.len() as u64,
+                        }
+                        .with_line(line_number));
+                    }
+
+                    // Create field map for this function.
+                    let mut field_map = HashMap::with_capacity(field_names.len());
+
+                    for (i, field_name) in field_names.iter().enumerate() {
+                        field_map.insert(field_name.trim().to_string(), i as u64);
+                    }
+
+                    self.locals.extend(field_map);
+                    self.out.push(format!("@fn {name} {args} {locals_count}"))
+                }
+
+                // Theses directives were already handled
+                collected
+                    if collected[0].starts_with("@capability")
+                        || collected[0].starts_with("@object")
+                        || collected[0].starts_with("@global") => {}
+
+                // Instruction desugaring
+
+                // globals map to @global defined value.
+                [op @ ("store.global" | "load.global" | "log" | "stg"), global] => {
+                    let global_number = self.globals.get(*global).ok_or_else(|| {
+                        LoweringErrorKind::UndefinedGlobal {
+                            global: global.to_string(),
+                        }
+                        .with_line(line_number)
+                    })?;
+
+                    self.out.push(format!("push.uint {global_number}"));
+                    self.out.push(format!("{op}"));
+                }
+
+                // Everything else in the file.
+                other => self.out.push(other.join(" ")),
             }
         }
 

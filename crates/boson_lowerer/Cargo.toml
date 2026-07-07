@@ -16,3 +16,4 @@ keywords = ["languages", "scripting", "script"]
 
 # Argument parsing helper
 clap = { version = "4.5", features = ["derive", "wrap_help"] }
+quark_map = { workspace = true }

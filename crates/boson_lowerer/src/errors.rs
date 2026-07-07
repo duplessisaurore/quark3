@@ -16,12 +16,18 @@ pub enum LoweringErrorKind {
     },
 
     // Invalid number of fields named
-    // for this object
+    // for this construct
     InvalidNamedFieldsAmount {
-        object_name: String,
+        name: String,
         fields_expected: u64,
         fields_got: u64,
     },
+
+    // An undefined global was used in a
+    // global instruction
+    UndefinedGlobal {
+        global: String
+    }
 }
 
 /// Located version of `LoweringErrorKind`
@@ -56,13 +62,19 @@ impl Display for LoweringErrorKind {
                 write!(f, "expected `{expected}`, got `{got}`")
             }
             Self::InvalidNamedFieldsAmount {
-                object_name,
+                name,
                 fields_expected,
                 fields_got,
             } => {
                 write!(
                     f,
-                    "The object `{object_name}` expected `{fields_expected}` field names, got `{fields_got}` field names"
+                    "The construct `{name}` expected `{fields_expected}` field names, got `{fields_got}` field names"
+                )
+            },
+            Self::UndefinedGlobal { global } => {
+                write!(
+                    f,
+                    "The global `{global}` was not defined"
                 )
             }
         }
