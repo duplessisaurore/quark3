@@ -212,7 +212,7 @@ impl Linker {
                     }
 
                     // Non-remappable things
-                    other => output.push(other.join(" ")),
+                    other => push_out(&file, other.join(" "), line_number, &mut output),
                 }
             }
         }
