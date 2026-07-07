@@ -17,6 +17,7 @@
 - [<code>🔬 Quark3 Language</code>](#quark3-language)
 - [<code>🌌 Assembly/Disassembly</code>](#quark3-asm-disasm)
 - [<code>🔧 Boson3 Preprocessor</code>](#boson3-preprocessor)
+- [<code>🔧 Gluon3 Linker</code>](#gluon3-linker)
 - [<code>🧾 License</code>](#license)
 - [<code>🎓 Acknowledgments</code>](#acknowledgements)
 
@@ -445,10 +446,10 @@ Quark3 is very low level and unfriendly. The `Boson3` preprocessor aims to provi
 These are the things provided by `boson3` above `quark3`:
 
 ### Locals and Global naming
-
+ global
 ```
-// This names the slot 0 global under the alias of <counter>
-@global counter 0
+// This names a new global slot under the alias of <counter>
+@global counter
 
 // We can then refer to it in a special inline load.global
 @fn my_fn 0 0
@@ -456,6 +457,7 @@ These are the things provided by `boson3` above `quark3`:
 
 // This desugars to
 @fn my_fn 0 0
+    // (this number is allocated, but you can get the idea)
     push.uint 0
     load.global
 ```
@@ -513,6 +515,14 @@ Which desugars to
 push.uint 0
 call.cap
 ```
+
+<a name="gluon3-linker"></a>
+## 🕸 Gluon3 Linker
+
+Writing a lot of code in one `boson3` file can become tiring and difficult to parse. The `Gluon3` linker aims to solve this by providing a "linking-layer" above `Boson3`.
+
+A file can be imported into another `Boson3` file using `Gluon3` with this special directive:
+
 
 
 <a name="license"></a>

@@ -32,6 +32,9 @@ pub struct BosonLowerer<'source> {
     // The name of the file we are lowering,
     // to insert locs everywhere for debugging.
     filename: String,
+
+    // The last allocated global slot
+    global_slot: u64,
 }
 
 impl<'source> BosonLowerer<'source> {
@@ -47,6 +50,7 @@ impl<'source> BosonLowerer<'source> {
             source,
             out: Vec::new(),
             filename,
+            global_slot: 0,
         }
     }
 
@@ -83,11 +87,13 @@ impl<'source> BosonLowerer<'source> {
             let tokens: Vec<&str> = line.split_whitespace().collect();
 
             match tokens.as_slice() {
-                // @global <name> <slot>
+                // @global <name>
                 // Defines a new global slot for usage with load and store global
-                ["@global", name, slot] => {
+                // This allocates the slot.
+                ["@global", name] => {
                     let name = name.to_string();
-                    let slot = parse_u64(line_number, slot)?;
+                    let slot = self.global_slot;
+                    self.global_slot += 1;
                     self.globals.insert(name, slot);
                 }
 
