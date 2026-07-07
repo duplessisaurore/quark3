@@ -20,18 +20,8 @@ pub struct BosonLowerer<'source> {
     // Object fields tracking, of object name to field name to index.
     object_fields: HashMap<String, HashMap<String, u64>>,
 
-    // trackers for construct ids
-    if_count: usize,
-    loop_count: usize,
-    try_count: usize,
-
     // The current locals for a function mapping
     locals: HashMap<String, u64>,
-
-    // Stack of the currently opened constructs,
-    // we need to track all of the differing constructs
-    // to match labels properly
-    blocks: Vec<Block>,
 
     // The input source file that we are desugaring
     source: &'source str,
@@ -44,23 +34,6 @@ pub struct BosonLowerer<'source> {
     filename: String,
 }
 
-/// A structured construct that is currently "open"
-#[derive(Debug)]
-enum Block {
-    If {
-        id: usize,
-        seen_else: bool,
-        cond_jump: usize,
-    },
-    Loop {
-        id: usize,
-    },
-    Try {
-        id: usize,
-        seen_catch: bool,
-    },
-}
-
 impl<'source> BosonLowerer<'source> {
     /// Creates a new `Boson3` Lowerer, this is responsible
     /// for lowering the `Boson3` sugared quark3 code down
@@ -70,11 +43,7 @@ impl<'source> BosonLowerer<'source> {
             globals: HashMap::new(),
             capabilities: HashMap::new(),
             object_fields: HashMap::new(),
-            if_count: 0,
-            loop_count: 0,
-            try_count: 0,
             locals: HashMap::new(),
-            blocks: Vec::new(),
             source,
             out: Vec::new(),
             filename,
@@ -88,11 +57,6 @@ impl<'source> BosonLowerer<'source> {
 
         // Lower all the lines out
         self.lower_lines()?;
-
-        // Any blocks left over means we have an unclosed construct
-        if !self.blocks.is_empty() {
-            return Err(LoweringErrorKind::UnclosedConstruct.with_line(self.source.lines().count()));
-        }
 
         let mut text = self.out.join("\n");
         text.push('\n');
@@ -272,7 +236,7 @@ impl<'source> BosonLowerer<'source> {
                     })?;
 
                     self.push_out(format!("push.uint {global_number}"), line_number);
-                    self.push_out(format!("{op}"), line_number);
+                    self.push_out(op.to_string(), line_number);
                 }
 
                 // locals map to @fn defined local names.
@@ -285,7 +249,7 @@ impl<'source> BosonLowerer<'source> {
                     })?;
 
                     self.push_out(format!("push.uint {local_number}"), line_number);
-                    self.push_out(format!("{op}"), line_number);
+                    self.push_out(op.to_string(), line_number);
                 }
 
                 // capabilities map to @capability defined names.
@@ -298,7 +262,7 @@ impl<'source> BosonLowerer<'source> {
                     })?;
 
                     self.push_out(format!("push.uint {cap_number}"), line_number);
-                    self.push_out(format!("{op}"), line_number);
+                    self.push_out(op.to_string(), line_number);
                 }
 
                 // object set/get with object field name as ObjectType.Field
@@ -340,10 +304,10 @@ impl<'source> BosonLowerer<'source> {
 
                     // Need to desugar here to a swap because of field ordering in instruction
                     if *op == "object.set" || *op == "ost" {
-                        self.push_out(format!("swap"), line_number);
+                        self.push_out("swap".to_string(), line_number);
                     }
 
-                    self.push_out(format!("{op}"), line_number);
+                    self.push_out(op.to_string(), line_number);
                 }
 
                 // Directives cant have @loc attached

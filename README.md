@@ -467,64 +467,6 @@ These are the things provided by `boson3` above `quark3`:
     store.local y
 ```
 
-### If statements
-
-```
-@fn my_fn 2 2 (x, y)
-    load.local x
-
-    if
-        blah blah blah
-    else
-        blah blah blah
-    end
-
-    blah blah blah
-```
-
-This desugars to
-
-```
-@fn my_fn 2 2 (x, y)
-    load.local x
-    
-    jump.if.false __if_1_else
-    ...true...
-    jump __if_1_end
-
-__if_1_else:
-        ...false...
-__if_1_end:
-
-    blah blah blah
-```
-
-The else is optional.
-
-### Loop
-
-```
-@fn my_fn 2 2
-    loop
-        ...body...
-    end
-
-    blah blah blah
-```
-
-This desugars to 
-
-```
-@fn my_fn 2 2
-__loop_1_start:
-    ...body...
-    jump __loop_1_start
-
-__loop_1_end:
-
-    blah blah blah
-```
-
 ### Object field naming
 
 ```
@@ -571,39 +513,6 @@ Which desugars to
 push.uint 0
 call.cap
 ```
-
-### Try Catch
-
-Try catch blocks exist too!
-
-```
-@fn my_fn 2 2
-    try
-        ...risky...
-    catch
-        ...handler...
-    end
-
-    blah blah blah
-```
-
-desguars to:
-
-```
-@fn my_fn 2 2
-
-    try __try_1_handler
-    ...risky...
-    end.try
-    jump __try_1_end
-
-__try_1_handler:
-    ...handler...
-
-__try_1_end:
-    blah blah blah
-```
-
 
 
 <a name="license"></a>

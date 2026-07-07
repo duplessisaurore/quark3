@@ -48,7 +48,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     // Lower input source
-    let lowerer: BosonLowerer<'_> = BosonLowerer::new(&source, input_path.to_string_lossy().to_string());
+    let lowerer: BosonLowerer<'_> =
+        BosonLowerer::new(&source, input_path.to_string_lossy().to_string());
     let lowered = lowerer.lower().unwrap_or_else(|e| {
         eprintln!("lowering error: {e}");
         process::exit(1);
