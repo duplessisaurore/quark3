@@ -69,7 +69,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Link input sources
     let linker = 
         Linker::new(source_files);
-    let linked = linker.link();
+    let linked = linker.link().unwrap_or_else(|e| {
+        eprintln!("linking error: {e}");
+        process::exit(1);
+    });;
 
     // Write output file
     fs::write(output_path, linked).unwrap_or_else(|e| {

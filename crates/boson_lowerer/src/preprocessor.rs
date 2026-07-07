@@ -30,10 +30,6 @@ pub struct BosonLowerer<'source> {
     // The current outputted lines of `Quark3`
     out: Vec<String>,
 
-    // The name of the file we are lowering,
-    // to insert locs everywhere for debugging.
-    filename: String,
-
     // The last allocated global slot
     global_slot: u64,
 }
@@ -42,7 +38,7 @@ impl<'source> BosonLowerer<'source> {
     /// Creates a new `Boson3` Lowerer, this is responsible
     /// for lowering the `Boson3` sugared quark3 code down
     /// into quark3.
-    pub fn new(source: &'source str, filename: String) -> Self {
+    pub fn new(source: &'source str) -> Self {
         Self {
             globals: HashMap::new(),
             capabilities: HashMap::new(),
@@ -50,7 +46,6 @@ impl<'source> BosonLowerer<'source> {
             locals: HashMap::new(),
             source,
             out: Vec::new(),
-            filename,
             global_slot: 0,
         }
     }
@@ -242,8 +237,8 @@ impl<'source> BosonLowerer<'source> {
                         .with_line(line_number)
                     })?;
 
-                    self.push_out(format!("push.uint {global_number}"), line_number);
-                    self.push_out(op.to_string(), line_number);
+                    self.out.push(format!("push.uint {global_number}"));
+                    self.out.push(op.to_string());
                 }
 
                 // locals map to @fn defined local names.
@@ -255,8 +250,8 @@ impl<'source> BosonLowerer<'source> {
                         .with_line(line_number)
                     })?;
 
-                    self.push_out(format!("push.uint {local_number}"), line_number);
-                    self.push_out(op.to_string(), line_number);
+                    self.out.push(format!("push.uint {local_number}"));
+                    self.out.push(op.to_string());
                 }
 
                 // capabilities map to @capability defined names.
@@ -268,8 +263,8 @@ impl<'source> BosonLowerer<'source> {
                         .with_line(line_number)
                     })?;
 
-                    self.push_out(format!("push.uint {cap_number}"), line_number);
-                    self.push_out(op.to_string(), line_number);
+                    self.out.push(format!("push.uint {cap_number}"));
+                    self.out.push(op.to_string());
                 }
 
                 // object set/get with object field name as ObjectType.Field
@@ -307,39 +302,22 @@ impl<'source> BosonLowerer<'source> {
                             .with_line(line_number)
                         })?;
 
-                    self.push_out(format!("push.uint {field_num}"), line_number);
+                    self.out.push(format!("push.uint {field_num}"));
 
                     // Need to desugar here to a swap because of field ordering in instruction
                     if *op == "object.set" || *op == "ost" {
-                        self.push_out("swap".to_string(), line_number);
+                        self.out.push("swap".to_string());
                     }
 
-                    self.push_out(op.to_string(), line_number);
-                }
-
-                // Directives cant have @loc attached
-                directive if directive.iter().any(|tok| tok.starts_with("@")) => {
-                    self.out.push(directive.join(" "))
+                    self.out.push(op.to_string());
                 }
 
                 // Everything else in the file, these are just normal instructions.
-                other => self.push_out(other.join(" "), line_number),
+                other => self.out.push(other.join(" ")),
             }
         }
 
         Ok(())
-    }
-
-    /// Inserts a @loc directive at the current position with the source
-    /// being the original boson3 file
-    fn insert_loc(&mut self, line_number: usize) {
-        self.out
-            .push(format!("@loc {} {line_number} 0", self.filename))
-    }
-
-    fn push_out(&mut self, contents: String, line_number: usize) {
-        self.insert_loc(line_number);
-        self.out.push(contents);
     }
 }
 
