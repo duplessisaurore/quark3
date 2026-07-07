@@ -523,7 +523,14 @@ Writing a lot of code in one `boson3` file can become tiring and difficult to pa
 
 A file can be imported into another `Boson3` file using `Gluon3` with this special directive:
 
+```
+@import math.b3
+@import uart.b3
+```
 
+Imports may further import other files. `Gluon3` will automatically remap all imported symbols and their references in the file during linking.
+
+All functions, objects and globals get renamed to be part of the imported files namespace. Each of these symbols is remapped as follows, say for `math.b3`, a function, object or global named `something` would be remapped to `math::something`.
 
 <a name="license"></a>
 ## 🧾 License
