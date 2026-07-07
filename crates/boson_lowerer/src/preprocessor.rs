@@ -38,6 +38,10 @@ pub struct BosonLowerer<'source> {
 
     // The current outputted lines of `Quark3`
     out: Vec<String>,
+
+    // The name of the file we are lowering,
+    // to insert locs everywhere for debugging.
+    filename: String,
 }
 
 /// A structured construct that is currently "open"
@@ -61,7 +65,7 @@ impl<'source> BosonLowerer<'source> {
     /// Creates a new `Boson3` Lowerer, this is responsible
     /// for lowering the `Boson3` sugared quark3 code down
     /// into quark3.
-    pub fn new(source: &'source str) -> Self {
+    pub fn new(source: &'source str, filename: String) -> Self {
         Self {
             globals: HashMap::new(),
             capabilities: HashMap::new(),
@@ -73,6 +77,7 @@ impl<'source> BosonLowerer<'source> {
             blocks: Vec::new(),
             source,
             out: Vec::new(),
+            filename,
         }
     }
 
@@ -255,7 +260,10 @@ impl<'source> BosonLowerer<'source> {
                 // Instruction desugaring
 
                 // globals map to @global defined value.
-                [op @ ("store.global" | "load.global" | "log" | "stg"), global] => {
+                [
+                    op @ ("store.global" | "load.global" | "log" | "stg"),
+                    global,
+                ] => {
                     let global_number = self.globals.get(*global).ok_or_else(|| {
                         LoweringErrorKind::UndefinedGlobal {
                             global: global.to_string(),
@@ -263,16 +271,104 @@ impl<'source> BosonLowerer<'source> {
                         .with_line(line_number)
                     })?;
 
-                    self.out.push(format!("push.uint {global_number}"));
-                    self.out.push(format!("{op}"));
+                    self.push_out(format!("push.uint {global_number}"), line_number);
+                    self.push_out(format!("{op}"), line_number);
                 }
 
-                // Everything else in the file.
-                other => self.out.push(other.join(" ")),
+                // locals map to @fn defined local names.
+                [op @ ("load.local" | "store.local" | "lol" | "stl"), local] => {
+                    let local_number = self.locals.get(*local).ok_or_else(|| {
+                        LoweringErrorKind::UndefinedLocal {
+                            local: local.to_string(),
+                        }
+                        .with_line(line_number)
+                    })?;
+
+                    self.push_out(format!("push.uint {local_number}"), line_number);
+                    self.push_out(format!("{op}"), line_number);
+                }
+
+                // capabilities map to @capability defined names.
+                [op @ ("call.cap" | "cap"), capability] => {
+                    let cap_number = self.capabilities.get(*capability).ok_or_else(|| {
+                        LoweringErrorKind::UndefinedCapability {
+                            capability: capability.to_string(),
+                        }
+                        .with_line(line_number)
+                    })?;
+
+                    self.push_out(format!("push.uint {cap_number}"), line_number);
+                    self.push_out(format!("{op}"), line_number);
+                }
+
+                // object set/get with object field name as ObjectType.Field
+                [op @ ("object.set" | "ost" | "object.get" | "ogt"), field] => {
+                    // We the field and object name (2 elements)
+                    let split_access = field.split(".").collect::<Vec<_>>();
+
+                    if split_access.len() != 2 {
+                        return Err(LoweringErrorKind::InvalidObjectField {
+                            got: field.to_string(),
+                        }
+                        .with_line(line_number));
+                    }
+
+                    let object_name = split_access[0];
+                    let field = split_access[1];
+
+                    // Get the field number from the object fields map.
+                    let field_num = self
+                        .object_fields
+                        .get(object_name)
+                        .ok_or_else(|| {
+                            LoweringErrorKind::AccessObjectWithNoFieldDefs {
+                                object_name: object_name.to_string(),
+                                field: field.to_string(),
+                            }
+                            .with_line(line_number)
+                        })?
+                        .get(field)
+                        .ok_or_else(|| {
+                            LoweringErrorKind::InvalidObjectFieldAccess {
+                                object_name: object_name.to_string(),
+                                field: field.to_string(),
+                            }
+                            .with_line(line_number)
+                        })?;
+
+                    self.push_out(format!("push.uint {field_num}"), line_number);
+
+                    // Need to desugar here to a swap because of field ordering in instruction
+                    if *op == "object.set" || *op == "ost" {
+                        self.push_out(format!("swap"), line_number);
+                    }
+
+                    self.push_out(format!("{op}"), line_number);
+                }
+
+                // Directives cant have @loc attached
+                directive if directive.iter().any(|tok| tok.starts_with("@")) => {
+                    self.out.push(directive.join(" "))
+                }
+
+                // Everything else in the file, these are just normal instructions.
+                other => self.push_out(other.join(" "), line_number),
             }
         }
 
         Ok(())
+    }
+
+    /// Inserts a @loc directive at the current position with the source
+    /// being the original boson3 file
+    fn insert_loc(&mut self, line_number: usize) {
+        self.out
+            .push(format!("@loc {} {line_number} 0", self.filename))
+    }
+
+    fn push_out(&mut self, contents: String, line_number: usize) {
+        self.insert_loc(line_number);
+        self.out.push(contents);
     }
 }
 
