@@ -120,7 +120,7 @@ impl<'source> BosonLowerer<'source> {
                 ["@capability", name, num] => {
                     let name = name.to_string();
                     let num = parse_u64(line_number, num)?;
-                    self.globals.insert(name, num);
+                    self.capabilities.insert(name, num);
                 }
 
                 // @object <name> <fields> (field_name, ...)
@@ -157,7 +157,7 @@ impl<'source> BosonLowerer<'source> {
                     let mut field_map = HashMap::with_capacity(field_names.len());
 
                     for (i, field_name) in field_names.iter().enumerate() {
-                        field_map.insert(field_name.to_string(), i as u64);
+                        field_map.insert(field_name.trim().to_string(), i as u64);
                     }
 
                     self.object_fields.insert(name.to_string(), field_map);
