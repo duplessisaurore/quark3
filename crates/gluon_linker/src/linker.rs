@@ -156,7 +156,7 @@ impl Linker {
         // Put back for remap instructions
         self.valid_symbols = remap_map;
 
-        if errors.len() == 0 {
+        if errors.is_empty() {
             return Ok(());
         }
 
@@ -179,7 +179,7 @@ impl Linker {
         // Put back for fun
         self.valid_symbols = valid_map;
 
-        if errors.len() == 0 {
+        if errors.is_empty() {
             return Ok(());
         }
 
@@ -390,7 +390,7 @@ impl Linker {
 
         file.file_contents = output.join("\n");
 
-        if errors.len() == 0 {
+        if errors.is_empty() {
             return Ok(());
         }
 
@@ -558,9 +558,9 @@ impl Linker {
                     };
 
                     let mut new_directive = (*remap_directive).to_vec();
-                    new_directive[1] = &remapped_name;
+                    new_directive[1] = remapped_name;
 
-                    output.push(format!("{}", new_directive.join(" ")));
+                    output.push(new_directive.join(" ").to_string());
                 }
 
                 // These are already consumed earlier, we ignore them now
@@ -598,7 +598,7 @@ impl Linker {
 
         file.remap_maps = Some(remap_map);
 
-        if errors.len() == 0 {
+        if errors.is_empty() {
             return Ok(());
         }
 
@@ -644,7 +644,7 @@ impl Linker {
             }
         }
 
-        if errors.len() == 0 {
+        if errors.is_empty() {
             return Ok(());
         }
 
@@ -670,25 +670,21 @@ impl Linker {
             let tokens: Vec<&str> = line.split_whitespace().collect();
 
             // Search for the requires directive in the file.
-            match tokens.as_slice() {
-                ["@requires", namespace] => {
-                    // Make sure the namespace is defined.
-                    if !self.namespaces.contains(&NameSpace(namespace.to_string())) {
-                        errors.push(
-                            LinkerErrorKind::NamespaceNotFound {
-                                namespace: namespace.to_string(),
-                                file_requires: file.full_file_name.clone(),
-                            }
-                            .with_line(line_number, file.full_file_name.clone()),
-                        );
-                    }
+            if let ["@requires", namespace] = tokens.as_slice() {
+                // Make sure the namespace is defined.
+                if !self.namespaces.contains(&NameSpace(namespace.to_string())) {
+                    errors.push(
+                        LinkerErrorKind::NamespaceNotFound {
+                            namespace: namespace.to_string(),
+                            file_requires: file.full_file_name.clone(),
+                        }
+                        .with_line(line_number, file.full_file_name.clone()),
+                    );
                 }
-
-                _ => {}
             }
         }
 
-        if errors.len() == 0 {
+        if errors.is_empty() {
             return Ok(());
         }
 
@@ -711,21 +707,17 @@ impl Linker {
             let tokens: Vec<&str> = line.split_whitespace().collect();
 
             // Search for the namespace directive in the file.
-            match tokens.as_slice() {
-                ["@namespace", namespace] => {
-                    if found_namespace.is_none() {
-                        let namespace = Some(NameSpace(namespace.to_string()));
-                        found_namespace = namespace.clone();
-                        file.namespace = namespace;
-                    } else {
-                        return Err(LinkerErrorKind::MoreThanOneNamespace {
-                            file: file.full_file_name.clone(),
-                        }
-                        .with_line(0, file.full_file_name.clone()));
+            if let ["@namespace", namespace] = tokens.as_slice() {
+                if found_namespace.is_none() {
+                    let namespace = Some(NameSpace(namespace.to_string()));
+                    found_namespace = namespace.clone();
+                    file.namespace = namespace;
+                } else {
+                    return Err(LinkerErrorKind::MoreThanOneNamespace {
+                        file: file.full_file_name.clone(),
                     }
+                    .with_line(0, file.full_file_name.clone()));
                 }
-
-                _ => {}
             }
         }
 

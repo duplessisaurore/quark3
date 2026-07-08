@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 file_name,
                 full_file_name: input_path.to_string_lossy().to_string(),
                 namespace: None,
-                remap_maps: None
+                remap_maps: None,
             }
         })
         .collect::<Vec<_>>();
