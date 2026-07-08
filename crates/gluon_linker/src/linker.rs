@@ -135,7 +135,7 @@ impl Linker {
             ));
             self.output.push(file.file_contents);
             self.output.push("\n\n".to_string());
-        };
+        }
 
         Ok(self.output.join(""))
     }
@@ -483,6 +483,7 @@ impl Linker {
             let line = strip_comment(line).trim();
 
             if line.is_empty() {
+                output.push(String::new());
                 continue;
             }
 
@@ -549,6 +550,7 @@ impl Linker {
                     let remapped_name = match remapped_name {
                         Ok(remapped_name) => remapped_name,
                         Err(error) => {
+                            output.push(String::new());
                             errors.push(error);
                             continue;
                         }
@@ -563,7 +565,10 @@ impl Linker {
                 // These are already consumed earlier, we ignore them now
                 consumed
                     if consumed[0].starts_with("@namespace")
-                        || consumed[0].starts_with("@required") => {}
+                        || consumed[0].starts_with("@required") =>
+                {
+                    output.push(String::new());
+                }
 
                 // We leave all other remapping to after all files have remapped their top level elements.
                 other => output.push(other.join(" ")),
