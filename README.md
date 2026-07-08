@@ -519,6 +519,87 @@ call.cap
 <a name="gluon3-linker"></a>
 ## 🕸 Gluon3 Linker
 
+The `Gluon3` linker allows for multiple `Boson3` files to be part of one `Boson3` project by "linking" together files. 
+
+Each file linked must define a namespace that prefixes all of it's top level items using the `@namespace` directive, such as:
+
+```
+@namespace std::string
+```
+
+A file can also prevent linking succeeding without a namespace being defined using the `@requires` directive:
+
+```
+@requires std::string
+```
+
+Linking essentially shoves all the files into one file, with the namespace prefixing all of it's capabilities,
+globals, functions and objects. All instructions will then automatically be remapped in the file to refer to it's namespaced items.
+
+For example:
+
+```
+// math.bs3
+@namespace math
+
+@fn add 2 2 (x, y)
+    load.local x
+    load.local y
+    numeric.add
+    return
+```
+
+```
+// main.bs3
+@namespace main
+@requires math
+
+@capability print 0
+@entry main
+
+@fn main 0 0
+    push.uint 1
+    push.uint 1
+    call math::add
+    call.cap print
+
+    push.unit
+    return
+```
+
+This will output `2`.
+
+The intermediate `Boson3` form produced for the above example is:
+
+```
+// Linked namespace `main` from file `/home/aurora/test-fermion/main.bs3`
+@capability main::print 0
+@entry main::main
+@fn main::main 0 0
+@loc /home/aurora/test-fermion/main.bs3 8 0
+push.uint 1
+@loc /home/aurora/test-fermion/main.bs3 9 0
+push.uint 1
+@loc /home/aurora/test-fermion/main.bs3 10 0
+call math::add
+@loc /home/aurora/test-fermion/main.bs3 11 0
+call.cap main::print
+@loc /home/aurora/test-fermion/main.bs3 13 0
+push.unit
+@loc /home/aurora/test-fermion/main.bs3 14 0
+return
+
+// Linked namespace `math` from file `/home/aurora/test-fermion/math.bs3`
+@fn math::add 2 2 (x, y)
+@loc /home/aurora/test-fermion/math.bs3 4 0
+load.local x
+@loc /home/aurora/test-fermion/math.bs3 5 0
+load.local y
+@loc /home/aurora/test-fermion/math.bs3 6 0
+numeric.add
+@loc /home/aurora/test-fermion/math.bs3 7 0
+return
+```
 
 <a name="license"></a>
 ## 🧾 License
