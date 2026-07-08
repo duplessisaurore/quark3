@@ -129,7 +129,7 @@ impl Linker {
         // Combine all files together into the output
         for file in self.sources {
             self.output.push(format!(
-                "// Linked namespace `{}` from file `{}`",
+                "// Linked namespace `{}` from file `{}`\n",
                 file.namespace.expect("namespace to be resolved").0,
                 file.full_file_name.clone()
             ));
@@ -291,6 +291,7 @@ impl Linker {
                     }
 
                     let object_name = split_access[0];
+                    let field = split_access[1];
 
                     let new_object_name = match object_map.get(object_name).ok_or_else(|| {
                         LinkerErrorKind::UndefinedName {
@@ -311,7 +312,7 @@ impl Linker {
 
                     push_out(
                         &file.full_file_name,
-                        format!("{op} {new_object_name}"),
+                        format!("{op} {new_object_name}.{field}"),
                         line_number,
                         &mut output,
                     );
@@ -565,7 +566,7 @@ impl Linker {
                 // These are already consumed earlier, we ignore them now
                 consumed
                     if consumed[0].starts_with("@namespace")
-                        || consumed[0].starts_with("@required") =>
+                        || consumed[0].starts_with("@requires") =>
                 {
                     output.push(String::new());
                 }
