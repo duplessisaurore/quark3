@@ -63,6 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 file_contents,
                 file_name,
                 full_file_name: input_path.to_string_lossy().to_string(),
+                namespace: None
             }
         })
         .collect::<Vec<_>>();
