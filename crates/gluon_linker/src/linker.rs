@@ -11,6 +11,7 @@ use std::{
 pub struct LinkerError {
     kind: LinkerErrorKind,
     line: usize,
+    file: String,
 }
 
 /// All kinds of errors that can occur during the linking process
@@ -74,7 +75,6 @@ pub struct Linker {
 ///
 /// The `file_name` should just be the absoslute file name
 /// of this file with the extension.
-#[derive(Hash)]
 pub struct LinkableFile {
     pub file_contents: String,
     pub file_name: String,
@@ -83,6 +83,27 @@ pub struct LinkableFile {
     // The namespace for the file, this is found by the linker
     // and should be set to None by default.
     pub namespace: Option<NameSpace>,
+
+    // This is built after the top level names have been remapped
+    // for this linkable file
+    pub remap_maps: Option<RemapMaps>,
+}
+
+/// The Remap-maps for a file which tells how the linker
+/// should remap everything, this is built by remapping all
+/// the top-level names using the namespace of the file
+pub struct RemapMaps {
+    // @global remap
+    pub globals_map: HashMap<String, String>,
+
+    // @fn remap
+    pub function_map: HashMap<String, String>,
+
+    // @capability remap
+    pub capability_map: HashMap<String, String>,
+
+    // @object remap
+    pub object_map: HashMap<String, String>,
 }
 
 impl Linker {
@@ -102,8 +123,21 @@ impl Linker {
     pub fn link(mut self) -> Result<String, Vec<LinkerError>> {
         self.collect_namespaces().map_err(|err| vec![err])?;
         self.check_all_requires()?;
+        self.remap_all_top_levels()?;
+        self.remap_all_instructions()?;
 
-        Ok(self.output.join("\n"))
+        // Combine all files together into the output
+        for file in self.sources {
+            self.output.push(format!(
+                "// Linked namespace `{}` from file `{}`",
+                file.namespace.expect("namespace to be resolved").0,
+                file.full_file_name.clone()
+            ));
+            self.output.push(file.file_contents);
+            self.output.push("\n\n".to_string());
+        };
+
+        Ok(self.output.join(""))
     }
 
     /// Remap all of the top-level names in all files
@@ -118,6 +152,242 @@ impl Linker {
                 errors.extend(this_errors);
             }
         }
+
+        // Put back for remap instructions
+        self.valid_symbols = remap_map;
+
+        if errors.len() == 0 {
+            return Ok(());
+        }
+
+        Err(errors)
+    }
+
+    /// Remap all of the instructions in all files
+    fn remap_all_instructions(&mut self) -> Result<(), Vec<LinkerError>> {
+        // The full valid map for matching on each source file
+        let valid_map = std::mem::take(&mut self.valid_symbols);
+        let mut errors = Vec::new();
+
+        // Remap each file's instructions
+        for file in &mut self.sources {
+            if let Err(this_errors) = Linker::remap_instructions(&valid_map, file) {
+                errors.extend(this_errors);
+            }
+        }
+
+        // Put back for fun
+        self.valid_symbols = valid_map;
+
+        if errors.len() == 0 {
+            return Ok(());
+        }
+
+        Err(errors)
+    }
+
+    /// Remaps all the instructions in a file
+    ///
+    /// This assumes the remap map was already defined in the file
+    fn remap_instructions(
+        valid_symbols: &HashSet<String>,
+        file: &mut LinkableFile,
+    ) -> Result<(), Vec<LinkerError>> {
+        // The new file contents after remapping
+        let mut output = Vec::new();
+        let mut errors = Vec::new();
+
+        // Remap-maps
+        let remap_maps = file
+            .remap_maps
+            .as_ref()
+            .expect("expected remap maps to already have been gathered for file");
+
+        let globals_map = &remap_maps.globals_map;
+        let function_map = &remap_maps.function_map;
+        let capability_map = &remap_maps.capability_map;
+        let object_map = &remap_maps.object_map;
+
+        // The pass, remap all instructions now with names
+        for (line_number, line) in file.file_contents.lines().enumerate() {
+            let line_number = line_number + 1;
+
+            // Strip the comment from a line and ignore if empty, this means
+            // we only parse actual tokens
+            let line = strip_comment(line).trim();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+
+            match tokens.as_slice() {
+                // globals remapping
+                [
+                    op @ ("store.global" | "load.global" | "log" | "stg"),
+                    global,
+                ] => {
+                    // Get the name from the map, else test if its in the valid symbols map.
+                    let new_global_name = match globals_map.get(*global).ok_or_else(|| {
+                        LinkerErrorKind::UndefinedName {
+                            name: global.to_string(),
+                        }
+                        .with_line(line_number, file.full_file_name.clone())
+                    }) {
+                        Ok(name) => name,
+                        Err(error) => {
+                            if valid_symbols.contains(*global) {
+                                *global
+                            } else {
+                                errors.push(error);
+                                continue;
+                            }
+                        }
+                    };
+
+                    push_out(
+                        &file.full_file_name,
+                        format!("{op} {new_global_name}"),
+                        line_number,
+                        &mut output,
+                    );
+                }
+
+                // object remapping
+                [op @ ("object.new" | "onw"), object] => {
+                    let new_object_name = match object_map.get(*object).ok_or_else(|| {
+                        LinkerErrorKind::UndefinedName {
+                            name: object.to_string(),
+                        }
+                        .with_line(line_number, file.full_file_name.clone())
+                    }) {
+                        Ok(name) => name,
+                        Err(error) => {
+                            if valid_symbols.contains(*object) {
+                                *object
+                            } else {
+                                errors.push(error);
+                                continue;
+                            }
+                        }
+                    };
+
+                    push_out(
+                        &file.full_file_name,
+                        format!("{op} {new_object_name}"),
+                        line_number,
+                        &mut output,
+                    );
+                }
+
+                [op @ ("object.set" | "ost" | "object.get" | "ogt"), object] => {
+                    // We the field and object name (2 elements)
+                    let split_access = object.split(".").collect::<Vec<_>>();
+
+                    // Fail in lowering.
+                    if split_access.len() != 2 {
+                        continue;
+                    }
+
+                    let object_name = split_access[0];
+
+                    let new_object_name = match object_map.get(object_name).ok_or_else(|| {
+                        LinkerErrorKind::UndefinedName {
+                            name: object.to_string(),
+                        }
+                        .with_line(line_number, file.full_file_name.clone())
+                    }) {
+                        Ok(name) => name,
+                        Err(error) => {
+                            if valid_symbols.contains(*object) {
+                                *object
+                            } else {
+                                errors.push(error);
+                                continue;
+                            }
+                        }
+                    };
+
+                    push_out(
+                        &file.full_file_name,
+                        format!("{op} {new_object_name}"),
+                        line_number,
+                        &mut output,
+                    );
+                }
+
+                // function remapping
+                [op @ ("call" | "cal" | "tail.call" | "tcl"), function] => {
+                    let new_function_name = match function_map.get(*function).ok_or_else(|| {
+                        LinkerErrorKind::UndefinedName {
+                            name: function.to_string(),
+                        }
+                        .with_line(line_number, file.full_file_name.clone())
+                    }) {
+                        Ok(name) => name,
+                        Err(error) => {
+                            if valid_symbols.contains(*function) {
+                                *function
+                            } else {
+                                errors.push(error);
+                                continue;
+                            }
+                        }
+                    };
+
+                    push_out(
+                        &file.full_file_name,
+                        format!("{op} {new_function_name}"),
+                        line_number,
+                        &mut output,
+                    );
+                }
+
+                // capabilities remapping
+                [op @ ("call.cap" | "cap"), capability] => {
+                    let new_capability_name =
+                        match capability_map.get(*capability).ok_or_else(|| {
+                            LinkerErrorKind::UndefinedName {
+                                name: capability.to_string(),
+                            }
+                            .with_line(line_number, file.full_file_name.clone())
+                        }) {
+                            Ok(name) => name,
+                            Err(error) => {
+                                if valid_symbols.contains(*capability) {
+                                    *capability
+                                } else {
+                                    errors.push(error);
+                                    continue;
+                                }
+                            }
+                        };
+
+                    push_out(
+                        &file.full_file_name,
+                        format!("{op} {new_capability_name}"),
+                        line_number,
+                        &mut output,
+                    );
+                }
+
+                // Directives cant have @loc attached
+                directive if directive.iter().any(|tok| tok.starts_with("@")) => {
+                    output.push(directive.join(" "))
+                }
+
+                // Non-remappable things
+                other => push_out(
+                    &file.full_file_name,
+                    other.join(" "),
+                    line_number,
+                    &mut output,
+                ),
+            }
+        }
+
+        file.file_contents = output.join("\n");
 
         if errors.len() == 0 {
             return Ok(());
@@ -170,7 +440,7 @@ impl Linker {
 
                 // @fn <name>
                 function
-                    if function.iter().any(|tok| tok.starts_with("@fn")) && function.len() < 2 =>
+                    if function.iter().any(|tok| tok.starts_with("@fn")) && function.len() > 1 =>
                 {
                     let name = function[1];
 
@@ -180,7 +450,7 @@ impl Linker {
 
                 // @object <name>
                 object
-                    if object.iter().any(|tok| tok.starts_with("@object")) && object.len() < 2 =>
+                    if object.iter().any(|tok| tok.starts_with("@object")) && object.len() > 1 =>
                 {
                     let name = object[1];
 
@@ -191,7 +461,7 @@ impl Linker {
                 // @capability <name>
                 capability
                     if capability.iter().any(|tok| tok.starts_with("@capability"))
-                        && capability.len() < 2 =>
+                        && capability.len() > 1 =>
                 {
                     let name = capability[1];
 
@@ -241,35 +511,35 @@ impl Linker {
                             LinkerErrorKind::UndefinedName {
                                 name: name.to_string(),
                             }
-                            .with_line(line_number)
+                            .with_line(line_number, file.full_file_name.clone())
                         }),
 
                         "@object" => object_map.get(name).ok_or_else(|| {
                             LinkerErrorKind::UndefinedName {
                                 name: name.to_string(),
                             }
-                            .with_line(line_number)
+                            .with_line(line_number, file.full_file_name.clone())
                         }),
 
                         "@global" => globals_map.get(name).ok_or_else(|| {
                             LinkerErrorKind::UndefinedName {
                                 name: name.to_string(),
                             }
-                            .with_line(line_number)
+                            .with_line(line_number, file.full_file_name.clone())
                         }),
 
                         "@fn" => function_map.get(name).ok_or_else(|| {
                             LinkerErrorKind::UndefinedName {
                                 name: name.to_string(),
                             }
-                            .with_line(line_number)
+                            .with_line(line_number, file.full_file_name.clone())
                         }),
 
                         "@entry" => function_map.get(name).ok_or_else(|| {
                             LinkerErrorKind::UndefinedName {
                                 name: name.to_string(),
                             }
-                            .with_line(line_number)
+                            .with_line(line_number, file.full_file_name.clone())
                         }),
 
                         _ => unreachable!(),
@@ -305,11 +575,22 @@ impl Linker {
         // Add all these remapped symbols to the list of valid symbols
         valid_map.extend(
             globals_map
-                .into_values()
-                .chain(capability_map.into_values())
-                .chain(function_map.into_values())
-                .chain(object_map.into_values()),
+                .values()
+                .cloned()
+                .chain(capability_map.values().cloned())
+                .chain(function_map.values().cloned())
+                .chain(object_map.values().cloned()),
         );
+
+        // Build the remap-map for this file
+        let remap_map = RemapMaps {
+            globals_map,
+            function_map,
+            capability_map,
+            object_map,
+        };
+
+        file.remap_maps = Some(remap_map);
 
         if errors.len() == 0 {
             return Ok(());
@@ -334,7 +615,7 @@ impl Linker {
                     file_a: original.clone(),
                     file_b: file.full_file_name.clone(),
                 }
-                .with_line(0));
+                .with_line(0, file.full_file_name.clone()));
             }
 
             // Add to maps
@@ -392,7 +673,7 @@ impl Linker {
                                 namespace: namespace.to_string(),
                                 file_requires: file.full_file_name.clone(),
                             }
-                            .with_line(line_number),
+                            .with_line(line_number, file.full_file_name.clone()),
                         );
                     }
                 }
@@ -434,7 +715,7 @@ impl Linker {
                         return Err(LinkerErrorKind::MoreThanOneNamespace {
                             file: file.full_file_name.clone(),
                         }
-                        .with_line(0));
+                        .with_line(0, file.full_file_name.clone()));
                     }
                 }
 
@@ -446,20 +727,8 @@ impl Linker {
             LinkerErrorKind::UndeclaredNamespace {
                 file: file.full_file_name.clone(),
             }
-            .with_line(0)
+            .with_line(0, file.full_file_name.clone())
         })
-    }
-
-    /// Inserts a @loc directive at the current position with the source
-    /// being the original boson3 file
-    fn insert_loc(&mut self, filename: &str, line_number: usize) {
-        self.output
-            .push(format!("@loc {} {line_number} 0", filename))
-    }
-
-    fn push_out(&mut self, file_name: &str, contents: String, line_number: usize) {
-        self.insert_loc(file_name, line_number);
-        self.output.push(contents);
     }
 }
 
@@ -475,10 +744,11 @@ fn strip_comment(line: &str) -> &str {
 impl LinkerErrorKind {
     /// Adds a line to this `LinkerErrorKind` turning it into a
     /// `LinkerError`.
-    pub fn with_line(self, line_number: usize) -> LinkerError {
+    pub fn with_line(self, line_number: usize, file: String) -> LinkerError {
         LinkerError {
             line: line_number,
             kind: self,
+            file,
         }
     }
 }
@@ -523,6 +793,20 @@ impl Display for LinkerErrorKind {
 
 impl Display for LinkerError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "line `{}`: {}", self.line, self.kind)
+        write!(f, "line `{}` in `{}`: {}", self.line, self.file, self.kind)
     }
+}
+
+/// Inserts a @loc directive at the current position with the source
+/// being the original boson3 file
+fn insert_loc(filename: &str, line_number: usize, output: &mut Vec<String>) {
+    output.push(format!("@loc {} {line_number} 0", filename))
+}
+
+/// Pushes a line of output to the `output`, with a LOC attached.
+///
+/// This should be used for instructions, not directives.
+fn push_out(file_name: &str, contents: String, line_number: usize, output: &mut Vec<String>) {
+    insert_loc(file_name, line_number, output);
+    output.push(contents);
 }
