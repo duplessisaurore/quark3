@@ -2,7 +2,10 @@
 //! this runs all the linking and remapping
 //! for all the files down into one
 
-use std::{collections::HashMap, fmt::Display};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+};
 
 /// Errors that can occur during the linking process
 pub struct LinkerError {
@@ -14,13 +17,50 @@ pub struct LinkerError {
 pub enum LinkerErrorKind {
     /// There was an undefined name that could not be remapped
     UndefinedName { name: String },
+
+    /// There was a file that did not declare its namspace
+    UndeclaredNamespace { file: String },
+
+    /// There was a duplicate namespace found, this is not allowed.
+    DuplicateNamespace {
+        // The namespace
+        namespace: String,
+
+        // These two files have duplicate namespaces
+        file_a: String,
+        file_b: String,
+    },
+
+    /// More than one namespace declared in a file!
+    MoreThanOneNamespace { file: String },
+
+    /// A file required a namespace that was not included
+    /// in the linking process
+    NamespaceNotFound {
+        namespace: String,
+        file_requires: String,
+    },
 }
+
+/// A namespace, essentially just a string for
+/// remapping things imported
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone)]
+pub struct NameSpace(String);
 
 /// The actual linker itself, this maps a set
 /// of input Boson3 source files that import eachother
 /// out into one final Boson3 file
 pub struct Linker {
-    sources: HashMap<(String, String), String>,
+    sources: Vec<LinkableFile>,
+
+    /// The output linked file
+    output: Vec<String>,
+
+    /// All declared namespaces
+    namespaces: HashSet<NameSpace>,
+
+    // Mapping of the name space to the filename that declared it
+    namespace_map: HashMap<NameSpace, String>,
 }
 
 /// The linkable file, this contains
@@ -40,284 +80,144 @@ pub struct LinkableFile {
 impl Linker {
     /// Creates a new linker that will link all of these source files together
     pub fn new(sources: Vec<LinkableFile>) -> Self {
-        let mut source_map = HashMap::new();
-
-        for source in sources {
-            source_map.insert(
-                (source.full_file_name, source.file_name),
-                source.file_contents,
-            );
-        }
-
         Self {
-            sources: source_map,
+            sources,
+            output: Vec::new(),
+            namespaces: HashSet::new(),
+            namespace_map: HashMap::new(),
         }
     }
 
     /// Links all the files together, returns the outputted linked
     /// together `Boson3` file.
-    pub fn link(self) -> Result<String, LinkerError> {
-        let mut output = Vec::new();
+    pub fn link(mut self) -> Result<String, Vec<LinkerError>> {
+        self.collect_namespaces().map_err(|err| vec![err])?;
 
-        for ((long_name, file), source) in self.sources.into_iter() {
-            let mut globals_map = HashMap::new();
-            let mut function_map = HashMap::new();
-            let mut capability_map = HashMap::new();
-            let mut object_map = HashMap::new();
+        Ok(self.output.join("\n"))
+    }
 
-            let namespace = extract_namespace(&file);
+    /// Collects all the namespaces from all files and prevents duplicates.
+    fn collect_namespaces(&mut self) -> Result<(), LinkerError> {
+        for file in &self.sources {
+            let namespace = self.find_namespace(file)?;
 
-            // First pass, gather all renamed elements
-            for line in source.lines() {
-                // Strip the comment from a line and ignore if empty, this means
-                // we only parse actual tokens
-                let line = strip_comment(line).trim();
-
-                if line.is_empty() {
-                    continue;
+            // Check for duplicates
+            if self.namespaces.contains(&namespace) {
+                let original = self
+                    .namespace_map
+                    .get(&namespace)
+                    .expect("expected namespace map and namespaces to be synced");
+                return Err(LinkerErrorKind::DuplicateNamespace {
+                    namespace: namespace.0,
+                    file_a: original.clone(),
+                    file_b: file.full_file_name.clone(),
                 }
-
-                let tokens: Vec<&str> = line.split_whitespace().collect();
-
-                match tokens.as_slice() {
-                    // @global <name>
-                    ["@global", name] => {
-                        let remapped = format!("{}::{}", namespace, name);
-                        globals_map.insert(name.to_string(), remapped);
-                    }
-
-                    // @fn <name>
-                    function if function.iter().any(|tok| tok.starts_with("@fn")) => {
-                        // Function needs at least @fn and <name> to be remapped.
-                        if function.len() < 2 {
-                            continue;
-                        };
-
-                        let name = function[1];
-
-                        let remapped = format!("{}::{}", namespace, name);
-                        function_map.insert(name.to_string(), remapped);
-                    }
-
-                    // @object <name>
-                    object if object.iter().any(|tok| tok.starts_with("@object")) => {
-                        // Object needs at least @object and <name> to be remapped.
-                        if object.len() < 2 {
-                            continue;
-                        };
-
-                        let name = object[1];
-
-                        let remapped = format!("{}::{}", namespace, name);
-                        object_map.insert(name.to_string(), remapped);
-                    }
-
-                    // @capability <name>
-                    capability if capability.iter().any(|tok| tok.starts_with("@capability")) => {
-                        // Capabilities need at least @capability and <name> to be remapped.
-                        if capability.len() < 2 {
-                            continue;
-                        };
-
-                        let name = capability[1];
-
-                        let remapped = format!("{}::{}", namespace, name);
-                        capability_map.insert(name.to_string(), remapped);
-                    }
-
-                    // Non-remappable things
-                    _ => {}
-                }
+                .with_line(0));
             }
 
-            // Second pass, remap everything now with gathered names
-            for (line_number, line) in source.lines().enumerate() {
-                let line_number = line_number + 1;
+            // Add to maps
+            self.namespaces.insert(namespace.clone());
+            self.namespace_map
+                .insert(namespace, file.full_file_name.clone());
+        }
 
-                // Strip the comment from a line and ignore if empty, this means
-                // we only parse actual tokens
-                let line = strip_comment(line).trim();
+        Ok(())
+    }
 
-                if line.is_empty() {
-                    continue;
+    /// Checks that all requires in a file are declared
+    /// in the `namespaces`
+    fn check_requires(&self, file: &LinkableFile) -> Result<(), Vec<LinkerError>> {
+        let mut errors = Vec::new();
+
+        for (line_number, line) in file.file_contents.lines().enumerate() {
+            let line_number = line_number + 1;
+
+            // Strip the comment from a line and ignore if empty, this means
+            // we only parse actual tokens
+            let line = strip_comment(line).trim();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+
+            // Search for the requires directive in the file.
+            match tokens.as_slice() {
+                ["@requires", namespace] => {
+                    // Make sure the namespace is defined.
+                    if !self.namespaces.contains(&NameSpace(namespace.to_string())) {
+                        errors.push(
+                            LinkerErrorKind::NamespaceNotFound {
+                                namespace: namespace.to_string(),
+                                file_requires: file.full_file_name.clone(),
+                            }
+                            .with_line(line_number),
+                        );
+                    }
                 }
 
-                let tokens: Vec<&str> = line.split_whitespace().collect();
-
-                match tokens.as_slice() {
-                    // These all have name as first arg and need to be remapped.
-                    remap_directive
-                        if remap_directive[0].starts_with("@capability")
-                            || remap_directive[0].starts_with("@object")
-                            || remap_directive[0].starts_with("@global")
-                            || remap_directive[0].starts_with("@fn")
-                            || remap_directive[0].starts_with("@entry") =>
-                    {
-                        // ???, let another phase handle
-                        if remap_directive.len() < 2 {
-                            output.push(remap_directive.join(" "));
-                        }
-
-                        let remap_type = remap_directive[0];
-                        let name = remap_directive[1];
-
-                        // Map to the remapped name for this.
-                        let remapped_name = match remap_type {
-                            "@capability" => capability_map.get(name).ok_or_else(|| {
-                                LinkerErrorKind::UndefinedName {
-                                    name: name.to_string(),
-                                }
-                                .with_line(line_number)
-                            })?,
-
-                            "@object" => object_map.get(name).ok_or_else(|| {
-                                LinkerErrorKind::UndefinedName {
-                                    name: name.to_string(),
-                                }
-                                .with_line(line_number)
-                            })?,
-
-                            "@global" => globals_map.get(name).ok_or_else(|| {
-                                LinkerErrorKind::UndefinedName {
-                                    name: name.to_string(),
-                                }
-                                .with_line(line_number)
-                            })?,
-
-                            "@fn" => function_map.get(name).ok_or_else(|| {
-                                LinkerErrorKind::UndefinedName {
-                                    name: name.to_string(),
-                                }
-                                .with_line(line_number)
-                            })?,
-
-                            "@entry" => function_map.get(name).ok_or_else(|| {
-                                LinkerErrorKind::UndefinedName {
-                                    name: name.to_string(),
-                                }
-                                .with_line(line_number)
-                            })?,
-
-                            _ => unreachable!(),
-                        }
-                        .to_string();
-
-                        let mut new_directive = (*remap_directive).to_vec();
-                        new_directive[1] = &remapped_name;
-
-                        output.push(new_directive.join(" ").to_string());
-                    }
-
-                    // globals remapping
-                    [
-                        op @ ("store.global" | "load.global" | "log" | "stg"),
-                        global,
-                    ] => {
-                        let new_global_name = globals_map.get(*global).ok_or_else(|| {
-                            LinkerErrorKind::UndefinedName {
-                                name: global.to_string(),
-                            }
-                            .with_line(line_number)
-                        })?;
-
-                        push_out(
-                            &long_name,
-                            format!("{op} {new_global_name}"),
-                            line_number,
-                            &mut output,
-                        );
-                    }
-
-                    // object remapping
-                    [op @ ("object.new" | "onw"), object] => {
-                        let new_object_name = object_map.get(*object).ok_or_else(|| {
-                            LinkerErrorKind::UndefinedName {
-                                name: object.to_string(),
-                            }
-                            .with_line(line_number)
-                        })?;
-
-                        push_out(
-                            &long_name,
-                            format!("{op} {new_object_name}"),
-                            line_number,
-                            &mut output,
-                        );
-                    }
-
-                    [op @ ("object.set" | "ost" | "object.get" | "ogt"), object] => {
-                        // We the field and object name (2 elements)
-                        let split_access = object.split(".").collect::<Vec<_>>();
-
-                        // Fail in lowering.
-                        if split_access.len() != 2 {
-                            continue;
-                        }
-
-                        let object_name = split_access[0];
-
-                        let new_object_name = object_map.get(object_name).ok_or_else(|| {
-                            LinkerErrorKind::UndefinedName {
-                                name: object_name.to_string(),
-                            }
-                            .with_line(line_number)
-                        })?;
-
-                        push_out(
-                            &long_name,
-                            format!("{op} {new_object_name}"),
-                            line_number,
-                            &mut output,
-                        );
-                    }
-
-                    // function remapping
-                    [op @ ("call" | "cal" | "tail.call" | "tcl"), function] => {
-                        let new_function_name = function_map.get(*function).ok_or_else(|| {
-                            LinkerErrorKind::UndefinedName {
-                                name: function.to_string(),
-                            }
-                            .with_line(line_number)
-                        })?;
-
-                        push_out(
-                            &long_name,
-                            format!("{op} {new_function_name}"),
-                            line_number,
-                            &mut output,
-                        );
-                    }
-
-                    // capabilities remapping
-                    [op @ ("call.cap" | "cap"), capability] => {
-                        let new_capability_name =
-                            capability_map.get(*capability).ok_or_else(|| {
-                                LinkerErrorKind::UndefinedName {
-                                    name: capability.to_string(),
-                                }
-                                .with_line(line_number)
-                            })?;
-
-                        push_out(
-                            &long_name,
-                            format!("{op} {new_capability_name}"),
-                            line_number,
-                            &mut output,
-                        );
-                    }
-
-                    // Directives cant have @loc attached
-                    directive if directive.iter().any(|tok| tok.starts_with("@")) => {
-                        output.push(directive.join(" "))
-                    }
-
-                    // Non-remappable things
-                    other => push_out(&long_name, other.join(" "), line_number, &mut output),
-                }
+                _ => {}
             }
         }
 
-        Ok(output.join("\n"))
+        if errors.len() == 0 {
+            return Ok(())
+        }
+
+        Err(errors)
+    }
+
+    /// Finds the namespace used for a file
+    fn find_namespace(&self, file: &LinkableFile) -> Result<NameSpace, LinkerError> {
+        let mut found_namespace = None;
+
+        for line in file.file_contents.lines() {
+            // Strip the comment from a line and ignore if empty, this means
+            // we only parse actual tokens
+            let line = strip_comment(line).trim();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+
+            // Search for the namespace directive in the file.
+            match tokens.as_slice() {
+                ["@namespace", namespace] => {
+                    if found_namespace.is_none() {
+                        found_namespace = Some(NameSpace(namespace.to_string()));
+                    } else {
+                        return Err(LinkerErrorKind::MoreThanOneNamespace {
+                            file: file.full_file_name.clone(),
+                        }
+                        .with_line(0));
+                    }
+                }
+
+                _ => {}
+            }
+        }
+
+        found_namespace.ok_or_else(|| {
+            LinkerErrorKind::UndeclaredNamespace {
+                file: file.full_file_name.clone(),
+            }
+            .with_line(0)
+        })
+    }
+
+    /// Inserts a @loc directive at the current position with the source
+    /// being the original boson3 file
+    fn insert_loc(&mut self, filename: &str, line_number: usize) {
+        self.output
+            .push(format!("@loc {} {line_number} 0", filename))
+    }
+
+    fn push_out(&mut self, file_name: &str, contents: String, line_number: usize) {
+        self.insert_loc(file_name, line_number);
+        self.output.push(contents);
     }
 }
 
@@ -328,15 +228,6 @@ fn strip_comment(line: &str) -> &str {
     } else {
         line
     }
-}
-
-/// Extracts the to-use namespace from a filename
-fn extract_namespace(file_name: &str) -> String {
-    let path = std::path::Path::new(file_name);
-    path.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(file_name)
-        .to_string()
 }
 
 impl LinkerErrorKind {
@@ -356,6 +247,28 @@ impl Display for LinkerErrorKind {
             Self::UndefinedName { name } => {
                 write!(f, "An undefined name was referenced: `{name}`")
             }
+            Self::DuplicateNamespace {
+                namespace,
+                file_a,
+                file_b,
+            } => {
+                write!(
+                    f,
+                    "The duplicate namespace `{namespace}` was declared in both `{file_a}` and `{file_b}`"
+                )
+            }
+            Self::MoreThanOneNamespace { file } => {
+                write!(
+                    f,
+                    "The file `{file}` contains more than one namespace declaration"
+                )
+            }
+            Self::UndeclaredNamespace { file } => {
+                write!(f, "The file `{file}` did not declare a namespace")
+            }
+            Self::NamespaceNotFound { namespace, file_requires } => {
+                write!(f, "The file `{file_requires}` @requires the namespace `{namespace}` but it was not found")
+            }
         }
     }
 }
@@ -364,15 +277,4 @@ impl Display for LinkerError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "line `{}`: {}", self.line, self.kind)
     }
-}
-
-/// Inserts a @loc directive at the current position with the source
-/// being the original boson3 file
-fn insert_loc(filename: &str, line_number: usize, output: &mut Vec<String>) {
-    output.push(format!("@loc {} {line_number} 0", filename))
-}
-
-fn push_out(file_name: &str, contents: String, line_number: usize, output: &mut Vec<String>) {
-    insert_loc(file_name, line_number, output);
-    output.push(contents);
 }

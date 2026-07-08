@@ -519,11 +519,6 @@ call.cap
 <a name="gluon3-linker"></a>
 ## 🕸 Gluon3 Linker
 
-Writing a lot of code in one `boson3` file can become tiring and difficult to parse. The `Gluon3` linker aims to solve this by providing a "linking-layer" above `Boson3`.
-
-All the files are combined together using the `Gluon3` linker, there is no inherent import mechanims. `Gluon3` will automatically remap all symbols and their references in the file during linking.
-
-All functions, objects, capabilities and globals get renamed to be part of the files namespace. Each of these symbols is remapped as follows, say for `math.b3`, a symbol named `something` would be remapped to `math::something`.
 
 <a name="license"></a>
 ## 🧾 License

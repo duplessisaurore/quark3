@@ -70,7 +70,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Link input sources
     let linker = Linker::new(source_files);
     let linked = linker.link().unwrap_or_else(|e| {
-        eprintln!("linking error: {e}");
+        eprintln!("linking errors:");
+        for error in e {
+            eprintln!("{error}");
+        }
+
         process::exit(1);
     });
 
