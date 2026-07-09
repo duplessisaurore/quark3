@@ -230,6 +230,8 @@ push.uint 7
 
 For booleans the accepted constnat values are `1`/`true` or `0`/`false`.
 
+For `Uint` and `Int`, there is support for hexadecimal, binary and octal numbers with the `0x`, `0b` and `0o` prefixes respectively on the numbers. 
+
 ### Integer Arithmetic
 
 | Long Form | Short Form | Opcode |
