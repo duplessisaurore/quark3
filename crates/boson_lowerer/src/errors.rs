@@ -95,6 +95,19 @@ pub enum LoweringErrorKind {
     ExpansionLimit {
         // This is the macro which we hit the limit in
         name: String
+    },
+
+    /// Leftover tokens as an argument to a macro invocation
+    MacroInvocationLeftoverTokens {
+        name: String,
+    },
+
+    /// Missing macro arguments! there were not enough arguments
+    /// to fufill this macro invocation
+    MissingMacroArguments {
+        name: String,
+        expected: u64,
+        got: u64
     }
 }
 
@@ -199,6 +212,12 @@ impl Display for LoweringErrorKind {
             }
             Self::ExpansionLimit { name } => {
                 write!(f, "While expanding the macro `{name}`, the macro expansion limit was hit!")
+            }
+            Self::MacroInvocationLeftoverTokens { name } => {
+                write!(f, "While expanding the macro `{name}`, there were leftover argument tokens!")
+            }
+            Self::MissingMacroArguments { name, expected, got } => {
+                write!(f, "The invocation of the macro `{name}` expected `{expected}` args, got `{got}`.")
             }
         }
     }

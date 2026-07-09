@@ -1,7 +1,7 @@
 //! The actual macro processor itself,
 //! this runs all the macro functions in `Boson3`
 
-use std::collections::HashMap;
+use std::{collections::HashMap, iter::Enumerate, vec::IntoIter};
 
 use crate::errors::{LoweringError, LoweringErrorKind};
 
@@ -197,7 +197,7 @@ impl<'source> MacroExpander<'source> {
     }
 
     /// Runs the expansion of macros on the current self.out
-    /// 
+    ///
     /// This returns whether or not a macro was seen this pass.
     fn expand_lines(&mut self) -> Result<bool, LoweringError> {
         // The current source of our expansion pass
@@ -236,6 +236,7 @@ impl<'source> MacroExpander<'source> {
                         }
                         .with_line(line_number));
                     };
+
                     // Make sure we are under the expansion limit to prevent infinitely-recursive expansions.
                     self.expansions += 1;
 
@@ -245,6 +246,11 @@ impl<'source> MacroExpander<'source> {
                         }
                         .with_line(line_number));
                     }
+
+                    // Parse all the arguments to this macro invocation
+                    let rest = rest.iter().map(|token| token.to_string()).collect();
+                    let args =
+                        parse_args(&mut lines, line_number, rest, macro_def.params.len(), name)?;
                 }
 
                 // Everything else passes through untouched.
@@ -292,4 +298,80 @@ fn collect_introduced(body: &[String], params: &[String]) -> Vec<String> {
     }
 
     introduced
+}
+
+/// Parses all the arguments to a macro invocation starting from a certain line
+/// in the set of `lines`.
+///
+/// `current` should be the remaining in-line elements to the macro invocation.
+///
+/// `arg_count` is the total number of arguments to the macro which is attempted to be matched.
+fn parse_args(
+    lines: &mut Enumerate<IntoIter<String>>,
+    line_number: usize,
+    mut current: Vec<String>,
+    arg_count: usize,
+    name: &str,
+) -> Result<Vec<MacroArg>, LoweringError> {
+    // The output args
+    let mut args = Vec::with_capacity(arg_count);
+
+    // Parse all of our required args
+    while args.len() < arg_count {
+        // Out of tokens on this line, continue on the next one.
+        if current.is_empty() {
+            let Some((_, line)) = lines.next() else {
+                return Err(LoweringErrorKind::MissingMacroArguments {
+                    name: name.to_string(),
+                    expected: arg_count as u64,
+                    got: args.len() as u64,
+                }
+                .with_line(line_number));
+            };
+
+            // We still ignore comments during expansion as they shouldn't count as actual lines
+            current = strip_comment(&line)
+                .split_whitespace()
+                .map(|token| token.to_string())
+                .collect();
+
+            continue;
+        }
+
+        // The first token, we match based on this if it a block or something
+        let token = current.remove(0);
+
+        match token.as_str() {
+            // A block argument of lines
+            "{" => args.push(MacroArg::Block(parse_block(
+                lines,
+                &mut current,
+                line_number,
+                name,
+            )?)),
+
+            // A closing brace outside of any block is invalid
+            // the same as @end
+            "}" => {
+                return Err(LoweringErrorKind::InvalidArgument {
+                    expected: format!("an argument to !{name}"),
+                    got: "}".to_string(),
+                }
+                .with_line(line_number));
+            }
+
+            // A plain token argument
+            _ => args.push(MacroArg::Token(token)),
+        }
+    }
+
+    // Leftover tokens after the final argument on the same line are not permitted
+    if !current.is_empty() {
+        return Err(LoweringErrorKind::MacroInvocationLeftoverTokens {
+            name: name.to_string(),
+        }
+        .with_line(line_number));
+    }
+
+    Ok(args)
 }
