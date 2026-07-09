@@ -15,7 +15,7 @@ pub enum LoweringErrorKind {
     // A local declaration was found
     // outside of a valid `Boson3` function
     LocalOutsideFunction {
-        local_name: String
+        local_name: String,
     },
 
     // Invalid number of fields named
@@ -88,13 +88,13 @@ pub enum LoweringErrorKind {
     /// Attempted to invoke an invalid macro which was
     /// not defined
     UndefinedMacro {
-        name: String
+        name: String,
     },
 
     /// We hit the expansion limit and are no longer continuing
     ExpansionLimit {
         // This is the macro which we hit the limit in
-        name: String
+        name: String,
     },
 
     /// Leftover tokens as an argument to a macro invocation
@@ -107,20 +107,20 @@ pub enum LoweringErrorKind {
     MissingMacroArguments {
         name: String,
         expected: u64,
-        got: u64
+        got: u64,
     },
 
     /// A block `{..}` was found without a terminating `}` during
     ///  the expansion of a macro
     UnterminatedBlock {
-        name: String
+        name: String,
     },
 
     /// A block argument was used in-line for this param
     /// is not supported, only alone can it be used.
-    BlockArgumentInline { 
+    BlockArgumentInline {
         name: String,
-        param: String 
+        param: String,
     },
 }
 
@@ -236,13 +236,26 @@ impl Display for LoweringErrorKind {
                 write!(f, "The macro `{name}` was not defined")
             }
             Self::ExpansionLimit { name } => {
-                write!(f, "While expanding the macro `{name}`, the macro expansion limit was hit!")
+                write!(
+                    f,
+                    "While expanding the macro `{name}`, the macro expansion limit was hit!"
+                )
             }
             Self::MacroInvocationLeftoverTokens { name } => {
-                write!(f, "While expanding the macro `{name}`, there were leftover argument tokens!")
+                write!(
+                    f,
+                    "While expanding the macro `{name}`, there were leftover argument tokens!"
+                )
             }
-            Self::MissingMacroArguments { name, expected, got } => {
-                write!(f, "The invocation of the macro `{name}` expected `{expected}` args, got `{got}`.")
+            Self::MissingMacroArguments {
+                name,
+                expected,
+                got,
+            } => {
+                write!(
+                    f,
+                    "The invocation of the macro `{name}` expected `{expected}` args, got `{got}`."
+                )
             }
         }
     }

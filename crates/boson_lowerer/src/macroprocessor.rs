@@ -124,7 +124,7 @@ impl<'source> MacroExpander<'source> {
                     let mut body = Vec::new();
                     let mut terminated = false;
 
-                    while let Some((body_number, body_line)) = lines.next() {
+                    for (body_number, body_line) in lines.by_ref() {
                         // Strip the comment from this line (we don't want to expand out comments)
                         let body_line = strip_comment(body_line).trim();
 
@@ -199,12 +199,12 @@ impl<'source> MacroExpander<'source> {
 
     /// Continuously runs the expansion of macros until there
     /// are no more expansions or an error occured
-    fn expand_until_complete(&mut self) -> Result<(), LoweringError> {  
+    fn expand_until_complete(&mut self) -> Result<(), LoweringError> {
         loop {
             // A macro wasn't seen this time around, so we're done!
             if !self.expand_lines()? {
-                return Ok(())
-            } 
+                return Ok(());
+            }
         }
     }
 
@@ -265,7 +265,13 @@ impl<'source> MacroExpander<'source> {
                         parse_args(&mut lines, line_number, rest, macro_def.params.len(), name)?;
 
                     // Expand the actual macro here
-                    let expanded = expand_macro_out_into_lines(macro_def, &args, self.expansions, name, line_number)?;
+                    let expanded = expand_macro_out_into_lines(
+                        macro_def,
+                        &args,
+                        self.expansions,
+                        name,
+                        line_number,
+                    )?;
 
                     // Push the expanded lines back into the output
                     current_expansion_out.push(expanded.join("\n"))
@@ -395,8 +401,8 @@ fn parse_args(
 }
 
 /// Collects the lines of a `{ }` block argument to a macro invocation
-/// 
-/// Blocks may span many lines and contain nested braces, line structure 
+///
+/// Blocks may span many lines and contain nested braces, line structure
 /// is preserved.
 fn parse_block(
     lines: &mut Enumerate<IntoIter<String>>,
@@ -461,7 +467,7 @@ fn parse_block(
                     return Ok(block);
                 }
 
-                // Else we've just got a nested block 
+                // Else we've just got a nested block
                 // which we leave for recursive expansions
                 building.push(token);
             }
@@ -472,7 +478,7 @@ fn parse_block(
 }
 
 /// Produce one expansion of a macro's output block
-/// 
+///
 /// This essentially just takes the macro def, all arguments
 /// and the unique ID of this macro for hygiene reasons./
 fn expand_macro_out_into_lines(
@@ -491,9 +497,12 @@ fn expand_macro_out_into_lines(
 
         // A parameter alone on a line essentially expands the parameter out at that line
         if let [lone_param] = tokens.as_slice() {
-
             // Map the param to the arg and insert at this position
-            if let Some(index) = macro_def.params.iter().position(|param| param == lone_param) {
+            if let Some(index) = macro_def
+                .params
+                .iter()
+                .position(|param| param == lone_param)
+            {
                 match &args[index] {
                     MacroArg::Token(token) => out.push(token.clone()),
                     MacroArg::Block(lines) => out.extend(lines.iter().cloned()),
@@ -514,7 +523,6 @@ fn expand_macro_out_into_lines(
             // Check if the token is one of our arguments to our macro
             // because in this case we don't want to do any hygienic remapping
             if let Some(index) = macro_def.params.iter().position(|param| param == stem) {
-
                 // For an inline token expansion, we only permit the usage of `Token`-type parameters
                 // (blocks don't really make sense lol since they're multiple tokens)
                 let MacroArg::Token(argument) = &args[index] else {

@@ -194,13 +194,13 @@ impl<'source> BosonLowerer<'source> {
 
             match tokens.as_slice() {
                 // @fn <name> <args> (arg_names, ...)
-                ["@fn", name, arg_count, args  @ ..] => {
+                ["@fn", name, arg_count, args @ ..] => {
                     // Parse <args>
-                    let args_count = parse_u64(line_number, *arg_count)?;
+                    let args_count = parse_u64(line_number, arg_count)?;
 
                     // Remaining elements which are arg names
                     let args = args.join(" ");
-                    
+
                     // Must start with "("
                     if !args.starts_with("(") {
                         return Err(LoweringErrorKind::InvalidArgument {
@@ -217,7 +217,7 @@ impl<'source> BosonLowerer<'source> {
                         .collect::<Vec<_>>();
 
                     // Reset arg names if we have no actual arguments.
-                    if (args_count == 0) && arg_names.len() == 1 && arg_names[0] == "" {
+                    if (args_count == 0) && arg_names.len() == 1 && arg_names[0].is_empty() {
                         arg_names.clear();
                     }
 
@@ -275,7 +275,7 @@ impl<'source> BosonLowerer<'source> {
                 }
 
                 // These @local directives are invalid..
-                ["@local", ..]=> {
+                ["@local", ..] => {
                     return Err(LoweringErrorKind::InvalidArgument {
                         expected: "@local <name>".to_string(),
                         got: tokens.join(" "),

@@ -9,7 +9,7 @@
 //!
 //! The `Boson3` crate is a crate that desugars some extra `Boson3` syntax
 //! ontop of `Quark3`, view the `README.md` in the repository.
-//! 
+//!
 //! `Boson3` also adds macros which are done by the `macroprocessor`
 
 #![feature(trim_prefix_suffix)]
@@ -17,8 +17,8 @@
 use std::error::Error;
 
 pub mod errors;
-pub mod preprocessor;
 pub mod macroprocessor;
+pub mod preprocessor;
 
 use clap::Parser;
 use std::{fs, path::PathBuf, process};
@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     // Lower input source
-    let lowerer= BosonLowerer::new(&expanded);
+    let lowerer = BosonLowerer::new(&expanded);
     let lowered = lowerer.lower().unwrap_or_else(|e| {
         eprintln!("lowering error: {e}");
         process::exit(1);
