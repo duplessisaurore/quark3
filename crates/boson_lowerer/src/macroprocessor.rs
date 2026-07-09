@@ -375,3 +375,80 @@ fn parse_args(
 
     Ok(args)
 }
+
+/// Collects the lines of a `{ }` block argument to a macro invocation
+/// 
+/// Blocks may span many lines and contain nested braces, line structure 
+/// is preserved.
+fn parse_block(
+    lines: &mut Enumerate<IntoIter<String>>,
+    current: &mut Vec<String>,
+    line_number: usize,
+    name: &str,
+) -> Result<Vec<String>, LoweringError> {
+    // The full block
+    let mut block = Vec::new();
+    let mut depth = 1u64;
+
+    // Tokens gathered for the block line currently being built.
+    let mut building: Vec<String> = Vec::new();
+
+    loop {
+        // The current line in this macro block no longer contains any tokens,
+        // continue onto the next
+        if current.is_empty() {
+            // Add the current line onto the full block
+            if !building.is_empty() {
+                block.push(building.join(" "));
+                building.clear();
+            }
+
+            let Some((_, line)) = lines.next() else {
+                return Err(LoweringErrorKind::UnterminatedBlock {
+                    name: name.to_string(),
+                }
+                .with_line(line_number));
+            };
+
+            *current = strip_comment(&line)
+                .split_whitespace()
+                .map(|token| token.to_string())
+                .collect();
+            continue;
+        }
+
+        // Once again, we need to check the starting token to
+        // see if its part of our block, or a sub-block in which
+        // the depth increases
+        let token = current.remove(0);
+
+        match token.as_str() {
+            // Entering a new block
+            "{" => {
+                depth += 1;
+                building.push(token);
+            }
+
+            // Closing a block
+            "}" => {
+                depth -= 1;
+
+                // The original block we are trying to
+                // parse is now closed!
+                if depth == 0 {
+                    if !building.is_empty() {
+                        block.push(building.join(" "));
+                    }
+
+                    return Ok(block);
+                }
+
+                // Else we've just got a nested block 
+                // which we leave for recursive expansions
+                building.push(token);
+            }
+
+            _ => building.push(token),
+        }
+    }
+}

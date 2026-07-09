@@ -108,6 +108,12 @@ pub enum LoweringErrorKind {
         name: String,
         expected: u64,
         got: u64
+    },
+
+    /// A block `{..}` was found without a terminating `}` during
+    ///  the expansion of a macro
+    UnterminatedBlock {
+        name: String
     }
 }
 
@@ -199,6 +205,12 @@ impl Display for LoweringErrorKind {
                 write!(
                     f,
                     "The macro `{name}` does not have a corresponding `@end` directive!"
+                )
+            }
+            Self::UnterminatedBlock { name } => {
+                write!(
+                    f,
+                    "The macro `{name}` during expansion contains an unterminated block!"
                 )
             }
             Self::DuplicateMacro { name } => {
