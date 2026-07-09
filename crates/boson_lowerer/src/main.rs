@@ -12,8 +12,6 @@
 //!
 //! `Boson3` also adds macros which are done by the `macroprocessor`
 
-#![feature(trim_prefix_suffix)]
-
 use std::error::Error;
 
 pub mod errors;

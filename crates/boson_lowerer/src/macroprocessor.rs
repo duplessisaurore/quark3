@@ -114,8 +114,10 @@ impl<'source> MacroExpander<'source> {
                     }
 
                     let param_names = string_params
-                        .trim_prefix("(")
-                        .trim_suffix(")")
+                        .strip_prefix("(")
+                        .unwrap_or(&string_params)
+                        .strip_suffix(")")
+                        .unwrap_or(&string_params)
                         .split(",")
                         .map(|split_str| split_str.to_string())
                         .collect::<Vec<String>>();
@@ -239,7 +241,7 @@ impl<'source> MacroExpander<'source> {
                 // !<name> <arg> { <arg> } ...
                 [invocation, rest @ ..] if invocation.starts_with("!") => {
                     // Grab the name of the macro we are
-                    let name = invocation.trim_prefix("!");
+                    let name = invocation.strip_prefix("!").unwrap_or(*invocation);
                     found_macro_invocation = true;
 
                     let Some(macro_def) = self.macros.get(name) else {
@@ -311,7 +313,9 @@ fn collect_introduced(body: &[String], params: &[String]) -> Vec<String> {
             ["@local", name] => name.to_string(),
 
             // <name>: defines a label that should be remapped
-            [first, ..] if first.ends_with(":") => first.trim_suffix(":").to_string(),
+            [first, ..] if first.ends_with(":") => {
+                first.strip_suffix(":").unwrap_or(*first).to_string()
+            }
 
             _ => continue,
         };
@@ -518,7 +522,11 @@ fn expand_macro_out_into_lines(
             // A label definition matches on its name as the parameter,
             // we keep the `:`
             let colon = token.ends_with(":");
-            let stem = if colon { token.trim_suffix(":") } else { token };
+            let stem = if colon {
+                token.strip_suffix(":").unwrap_or(token)
+            } else {
+                token
+            };
 
             // Check if the token is one of our arguments to our macro
             // because in this case we don't want to do any hygienic remapping

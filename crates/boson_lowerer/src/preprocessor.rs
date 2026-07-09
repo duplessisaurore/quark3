@@ -140,8 +140,10 @@ impl<'source> BosonLowerer<'source> {
                     // Remaining elements which are field names
                     let fields = other[3..].join(" ");
                     let field_names = fields
-                        .trim_prefix("(")
-                        .trim_suffix(")")
+                        .strip_prefix("(")
+                        .unwrap_or(&fields)
+                        .strip_suffix(")")
+                        .unwrap_or(&fields)
                         .split(",")
                         .collect::<Vec<_>>();
 
@@ -211,8 +213,10 @@ impl<'source> BosonLowerer<'source> {
                     }
 
                     let mut arg_names = args
-                        .trim_prefix("(")
-                        .trim_suffix(")")
+                        .strip_prefix("(")
+                        .unwrap_or(&args)
+                        .strip_suffix(")")
+                        .unwrap_or(&args)
                         .split(",")
                         .collect::<Vec<_>>();
 
