@@ -12,12 +12,26 @@ pub enum LoweringErrorKind {
         got: String,
     },
 
+    // A local declaration was found
+    // outside of a valid `Boson3` function
+    LocalOutsideFunction {
+        local_name: String
+    },
+
     // Invalid number of fields named
     // for this construct
     InvalidNamedFieldsAmount {
         name: String,
         fields_expected: u64,
         fields_got: u64,
+    },
+
+    // Invalid number of args named
+    // for this function
+    InvalidNamedArgsFunctionAmount {
+        name: String,
+        args_expected: u64,
+        args_got: u64,
     },
 
     // An undefined global was used in a
@@ -93,6 +107,16 @@ impl Display for LoweringErrorKind {
                     "The construct `{name}` expected `{fields_expected}` field names, got `{fields_got}` field names"
                 )
             }
+            Self::InvalidNamedArgsFunctionAmount {
+                name,
+                args_expected,
+                args_got,
+            } => {
+                write!(
+                    f,
+                    "The function `{name}` expected `{args_expected}` arg names, got `{args_got}` arg names declared."
+                )
+            }
             Self::UndefinedGlobal { global } => {
                 write!(f, "The global `{global}` was not defined")
             }
@@ -118,6 +142,12 @@ impl Display for LoweringErrorKind {
                 write!(
                     f,
                     "Attempted to access field `{field}` on object with type `{object_name}`, but `{object_name}` doesn't contain that field!"
+                )
+            }
+            Self::LocalOutsideFunction { local_name } => {
+                write!(
+                    f,
+                    "Attempted to declare local with name `{local_name}` outside of a function!"
                 )
             }
         }

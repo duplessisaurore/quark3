@@ -21,8 +21,8 @@ pub struct BosonLowerer<'source> {
     // Object fields tracking, of object name to field name to index.
     object_fields: HashMap<String, HashMap<String, u64>>,
 
-    // The current locals for a function mapping
-    locals: HashMap<String, u64>,
+    // The current function who we are tracking for @locals
+    function: Option<Boson3Function>,
 
     // The input source file that we are desugaring
     source: &'source str,
@@ -34,6 +34,28 @@ pub struct BosonLowerer<'source> {
     global_slot: u64,
 }
 
+/// A `Boson3` function whose locals count is computed by the lowerer.
+///
+/// This is created for all @fn declarations which must use the special
+/// `Boson3` syntax.
+#[derive(Debug)]
+struct Boson3Function {
+    /// The index of the emitted `@fn` line in the lowerer output.
+    line: usize,
+
+    /// The name of the function.
+    name: String,
+
+    /// How many arguments the function takes.
+    args: u64,
+
+    /// The locals named so far in this function, of name to slot.
+    locals: HashMap<String, u64>,
+
+    /// The next local slot to be allocated.
+    next_slot: u64,
+}
+
 impl<'source> BosonLowerer<'source> {
     /// Creates a new `Boson3` Lowerer, this is responsible
     /// for lowering the `Boson3` sugared quark3 code down
@@ -43,7 +65,7 @@ impl<'source> BosonLowerer<'source> {
             globals: HashMap::new(),
             capabilities: HashMap::new(),
             object_fields: HashMap::new(),
-            locals: HashMap::new(),
+            function: None,
             source,
             out: Vec::new(),
             global_slot: 0,
@@ -171,50 +193,97 @@ impl<'source> BosonLowerer<'source> {
             let tokens: Vec<&str> = line.split_whitespace().collect();
 
             match tokens.as_slice() {
-                // @fn <name> <args> <locals> (field_name, ...)
-                function if function.iter().any(|tok| tok.starts_with("@fn")) => {
-                    // No matter what, encountering a function directive resets the locals table.
-                    self.locals.clear();
-
-                    // The @fn, <name>, <args>, <locals> part are required, with an optional field_names
-                    // which this desugarer handles, so less than 5 means no field names.
-                    if function.len() < 5 {
-                        self.out.push(function.join(" "));
-                        continue;
-                    };
-
-                    // Parse <name>, <args> and <locals>, since args shares locals
+                // @fn <name> <args> (arg_names, ...)
+                function
+                    if function.iter().any(|tok| tok.starts_with("@fn")) && function.len() >= 4 =>
+                {
+                    // Parse <name> and <args>
                     let name = function[1];
-                    let args = function[2];
-                    let locals_count = parse_u64(line_number, function[3])?;
+                    let args_count = parse_u64(line_number, function[2])?;
 
-                    // Remaining elements which are field names
-                    let fields = function[4..].join(" ");
-                    let field_names = fields
+                    // Remaining elements which are arg names
+                    let args = function[3..].join(" ");
+                    
+                    // Must start with "("
+                    if !args.starts_with("(") {
+                        return Err(LoweringErrorKind::InvalidArgument {
+                            expected: "@fn <name> <args> (<arg_name>, <arg_name>, ...)".to_string(),
+                            got: tokens.join(" "),
+                        }
+                        .with_line(line_number));
+                    }
+
+                    let mut arg_names = args
                         .trim_prefix("(")
                         .trim_suffix(")")
                         .split(",")
                         .collect::<Vec<_>>();
 
-                    // For a function we need to have all locals named.
-                    if (field_names.len() as u64) != locals_count {
-                        return Err(LoweringErrorKind::InvalidNamedFieldsAmount {
+                    // Reset arg names if we have no actual arguments.
+                    if (args_count == 0) && arg_names.len() == 1 && arg_names[0] == "" {
+                        arg_names.clear();
+                    }
+
+                    // For a function we need to have all args named.
+                    if (arg_names.len() as u64) != args_count {
+                        return Err(LoweringErrorKind::InvalidNamedArgsFunctionAmount {
                             name: name.to_string(),
-                            fields_expected: locals_count,
-                            fields_got: field_names.len() as u64,
+                            args_expected: args_count,
+                            args_got: arg_names.len() as u64,
                         }
                         .with_line(line_number));
                     }
 
-                    // Create field map for this function.
-                    let mut field_map = HashMap::with_capacity(field_names.len());
+                    // Create locals map for this function starting with args.
+                    let mut locals_map = HashMap::with_capacity(arg_names.len());
 
-                    for (i, field_name) in field_names.iter().enumerate() {
-                        field_map.insert(field_name.trim().to_string(), i as u64);
+                    for (i, arg_name) in arg_names.iter().enumerate() {
+                        locals_map.insert(arg_name.trim().to_string(), i as u64);
                     }
 
-                    self.locals.extend(field_map);
-                    self.out.push(format!("@fn {name} {args} {locals_count}"))
+                    // The new tracked function
+                    let tracked_function =
+                        Boson3Function::new(self.out.len(), name, args_count, locals_map);
+
+                    self.out.push(tracked_function.fn_line());
+                    self.function = Some(tracked_function);
+                }
+
+                // These @fn directives do not obey the requirements so they're invalid
+                collected if collected[0].starts_with("@fn") => {
+                    return Err(LoweringErrorKind::InvalidArgument {
+                        expected: "@fn <name> <args> (<arg_name>, <arg_name>, ...)".to_string(),
+                        got: tokens.join(" "),
+                    }
+                    .with_line(line_number));
+                }
+
+                // @local <name>
+                // Allocates the next local slot in the current function under
+                // the <name> similar to @global
+                ["@local", name] => {
+                    let Some(function) = self.function.as_mut() else {
+                        return Err(LoweringErrorKind::LocalOutsideFunction {
+                            local_name: name.to_string(),
+                        }
+                        .with_line(line_number));
+                    };
+
+                    // Add to the locals map for the current function
+                    function.locals.insert(name.to_string(), function.next_slot);
+                    function.next_slot += 1;
+
+                    // The local count has grown so we need to update the @fn line
+                    self.out[function.line] = function.fn_line();
+                }
+
+                // These @local directives are invalid..
+                collected if collected[0].starts_with("@local") => {
+                    return Err(LoweringErrorKind::InvalidArgument {
+                        expected: "@local <name>".to_string(),
+                        got: tokens.join(" "),
+                    }
+                    .with_line(line_number));
                 }
 
                 // Theses directives were already handled
@@ -243,12 +312,16 @@ impl<'source> BosonLowerer<'source> {
 
                 // locals map to @fn defined local names.
                 [op @ ("load.local" | "store.local" | "lol" | "stl"), local] => {
-                    let local_number = self.locals.get(*local).ok_or_else(|| {
-                        LoweringErrorKind::UndefinedLocal {
-                            local: local.to_string(),
-                        }
-                        .with_line(line_number)
-                    })?;
+                    let local_number = self
+                        .function
+                        .as_ref()
+                        .and_then(|counted| counted.locals.get(*local))
+                        .ok_or_else(|| {
+                            LoweringErrorKind::UndefinedLocal {
+                                local: local.to_string(),
+                            }
+                            .with_line(line_number)
+                        })?;
 
                     self.out.push(format!("push.uint {local_number}"));
                     self.out.push(op.to_string());
@@ -344,4 +417,29 @@ fn parse_u64(line: usize, token: &str) -> Result<u64, LoweringError> {
         }
         .with_line(line)
     })
+}
+
+impl Boson3Function {
+    /// Creates a new Boson3Function for function locals tracking
+    fn new(line: usize, name: &str, args: u64, initial_locals: HashMap<String, u64>) -> Self {
+        Self {
+            line,
+            name: name.to_string(),
+            args,
+            locals: initial_locals,
+
+            // The next slot for locals starts after the arguments.
+            next_slot: args + 1,
+        }
+    }
+
+    /// The current locals count of this function.
+    fn locals_count(&self) -> u64 {
+        self.args.max(self.next_slot)
+    }
+
+    /// The complete `@fn` line with the current locals count
+    fn fn_line(&self) -> String {
+        format!("@fn {} {} {}", self.name, self.args, self.locals_count())
+    }
 }

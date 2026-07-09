@@ -448,13 +448,13 @@ Quark3 is very low level and unfriendly. The `Boson3` preprocessor aims to provi
 These are the things provided by `boson3` above `quark3`:
 
 ### Locals and Global naming
- global
+ 
 ```
 // This names a new global slot under the alias of <counter>
 @global counter
 
 // We can then refer to it in a special inline load.global
-@fn my_fn 0 0
+@fn my_fn 0 ()
     load.global counter
 
 // This desugars to
@@ -465,10 +465,35 @@ These are the things provided by `boson3` above `quark3`:
 ```
 
 ```
-// This names the locals as <x, y>
-@fn my_fn 2 2 (x, y)
+// This names the arguments to the function as x and y
+@fn my_fn 2 (x, y)
     load.local x
     store.local y
+
+// Desugars to
+@fn my_fn 2 2
+    push.uint 0
+    load.local
+
+    push.uint 1
+    store.local
+
+// To define new non-argument locals, use the `@local` directive
+@fn main 0 ()
+
+    @local result
+    push.uint 1
+    push.uint 1
+    call math::add
+    store.local result
+
+    load.local result
+    call.cap print
+
+    load.local result
+    return
+
+// The @local must be before the local is used
 ```
 
 ### Object field naming
@@ -544,7 +569,7 @@ For example:
 // math.bs3
 @namespace math
 
-@fn add 2 2 (x, y)
+@fn add 2 (x, y)
     load.local x
     load.local y
     numeric.add
@@ -559,7 +584,7 @@ For example:
 @capability print 0
 @entry main
 
-@fn main 0 0
+@fn main 0 ()
     push.uint 1
     push.uint 1
     call math::add
