@@ -429,7 +429,7 @@ impl Boson3Function {
             locals: initial_locals,
 
             // The next slot for locals starts after the arguments.
-            next_slot: args + 1,
+            next_slot: args,
         }
     }
 
