@@ -118,7 +118,7 @@ impl Instruction {
             | Self::Try(_)
             | Self::Call(_)
             | Self::TailCall(_)
-            | Self::ObjectNew(_) 
+            | Self::ObjectNew(_)
             | Self::ObjectTypeTag(_) => 10,
 
             // Emits just the opcode, only one byte
@@ -335,26 +335,14 @@ fn parse_instruction(line: usize, tokens: &[&str]) -> Result<Instruction, LinedP
         Opcode::PushInt => {
             // The constant value is an i64 argument, try cast
             let value = require_arg(line, long_from_opcode(&Opcode::PushInt), tokens, 1)?;
-            let value = value.parse::<i64>().map_err(|_| {
-                ParseError::InvalidArgument {
-                    expected: "64-bit Signed Integer",
-                    got: value.to_string(),
-                }
-                .with_line(line)
-            })?;
+            let value = parse_int(value, line)?;
             Ok(Instruction::PushInt(value))
         }
 
         Opcode::PushUInt => {
             // The constant value is an u64 argument, try cast
             let value = require_arg(line, long_from_opcode(&Opcode::PushUInt), tokens, 1)?;
-            let value = value.parse::<u64>().map_err(|_| {
-                ParseError::InvalidArgument {
-                    expected: "64-bit Unsigned Integer",
-                    got: value.to_string(),
-                }
-                .with_line(line)
-            })?;
+            let value = parse_uint(value, line)?;
             Ok(Instruction::PushUInt(value))
         }
 
@@ -453,6 +441,64 @@ fn require_arg<'a>(
         }
         .with_line(line),
     )
+}
+
+/// Parses an i64 Int type from the string content with support
+/// for hexadecimal, octal and binary.
+fn parse_int(string: &str, line: usize) -> Result<i64, LinedParseError> {
+    // Negatives
+    let parse_result = if let Some(rest) = string.strip_prefix("-0x") {
+        i64::from_str_radix(rest, 16).map(|v| -v)
+    } else if let Some(rest) = string.strip_prefix("-0b") {
+        i64::from_str_radix(rest, 2).map(|v| -v)
+    } else if let Some(rest) = string.strip_prefix("-0o") {
+        i64::from_str_radix(rest, 8).map(|v| -v)
+
+    // Positive prefixes
+    } else if let Some(rest) = string.strip_prefix("0x") {
+        i64::from_str_radix(rest, 16)
+    } else if let Some(rest) = string.strip_prefix("0b") {
+        i64::from_str_radix(rest, 2)
+    } else if let Some(rest) = string.strip_prefix("0o") {
+        i64::from_str_radix(rest, 8)
+    } else {
+        string.parse()
+    };
+
+    parse_result.map_err(|_| {
+        ParseError::InvalidArgument {
+            expected: "64-bit Signed Integer",
+            got: string.to_string(),
+        }
+        .with_line(line)
+    })
+}
+
+/// Parse a u64 `UInt` from a string, with support for hexadecimal
+/// binary and octal numbers.
+fn parse_uint(string: &str, line: usize) -> Result<u64, LinedParseError> {
+    // Hexadecimal
+    let parse_result = if let Some(rest) = string.strip_prefix("0x") {
+        u64::from_str_radix(rest, 16)
+
+    // Binary
+    } else if let Some(rest) = string.strip_prefix("0b") {
+        u64::from_str_radix(rest, 2)
+
+    // Octal
+    } else if let Some(rest) = string.strip_prefix("0o") {
+        u64::from_str_radix(rest, 8)
+    } else {
+        string.parse::<u64>()
+    };
+
+    parse_result.map_err(|_| {
+        ParseError::InvalidArgument {
+            expected: "64-bit Signed Integer",
+            got: string.to_string(),
+        }
+        .with_line(line)
+    })
 }
 
 /// Parse a u32 from a string token
