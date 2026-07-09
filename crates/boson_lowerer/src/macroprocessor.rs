@@ -71,6 +71,7 @@ impl<'source> MacroExpander<'source> {
     pub fn expand(mut self) -> Result<String, LoweringError> {
         // Collect all of the @macro definitions
         self.collect()?;
+        self.expand_until_complete()?;
 
         let mut text = self.out.join("\n");
         text.push('\n');
@@ -196,6 +197,17 @@ impl<'source> MacroExpander<'source> {
         Ok(())
     }
 
+    /// Continuously runs the expansion of macros until there
+    /// are no more expansions or an error occured
+    fn expand_until_complete(&mut self) -> Result<(), LoweringError> {  
+        loop {
+            // A macro wasn't seen this time around, so we're done!
+            if !self.expand_lines()? {
+                return Ok(())
+            } 
+        }
+    }
+
     /// Runs the expansion of macros on the current self.out
     ///
     /// This returns whether or not a macro was seen this pass.
@@ -251,6 +263,12 @@ impl<'source> MacroExpander<'source> {
                     let rest = rest.iter().map(|token| token.to_string()).collect();
                     let args =
                         parse_args(&mut lines, line_number, rest, macro_def.params.len(), name)?;
+
+                    // Expand the actual macro here
+                    let expanded = expand_macro_out_into_lines(macro_def, &args, self.expansions, name, line_number)?;
+
+                    // Push the expanded lines back into the output
+                    current_expansion_out.push(expanded.join("\n"))
                 }
 
                 // Everything else passes through untouched.
@@ -451,4 +469,83 @@ fn parse_block(
             _ => building.push(token),
         }
     }
+}
+
+/// Produce one expansion of a macro's output block
+/// 
+/// This essentially just takes the macro def, all arguments
+/// and the unique ID of this macro for hygiene reasons./
+fn expand_macro_out_into_lines(
+    macro_def: &Macro,
+    args: &[MacroArg],
+    id: u64,
+    macro_name: &str,
+    line_number: usize,
+) -> Result<Vec<String>, LoweringError> {
+    // The output lines of this macro expansion
+    let mut out = Vec::new();
+
+    // We need to now expand each line in the macro def
+    for body_line in &macro_def.body {
+        let tokens: Vec<&str> = body_line.split_whitespace().collect();
+
+        // A parameter alone on a line essentially expands the parameter out at that line
+        if let [lone_param] = tokens.as_slice() {
+
+            // Map the param to the arg and insert at this position
+            if let Some(index) = macro_def.params.iter().position(|param| param == lone_param) {
+                match &args[index] {
+                    MacroArg::Token(token) => out.push(token.clone()),
+                    MacroArg::Block(lines) => out.extend(lines.iter().cloned()),
+                }
+                continue;
+            }
+        }
+
+        // Otherwise the line is rebuilt token by token since params maybe in-line
+        let mut rebuilt = Vec::with_capacity(tokens.len());
+
+        for token in tokens {
+            // A label definition matches on its name as the parameter,
+            // we keep the `:`
+            let colon = token.ends_with(":");
+            let stem = if colon { token.trim_suffix(":") } else { token };
+
+            // Check if the token is one of our arguments to our macro
+            // because in this case we don't want to do any hygienic remapping
+            if let Some(index) = macro_def.params.iter().position(|param| param == stem) {
+
+                // For an inline token expansion, we only permit the usage of `Token`-type parameters
+                // (blocks don't really make sense lol since they're multiple tokens)
+                let MacroArg::Token(argument) = &args[index] else {
+                    return Err(LoweringErrorKind::BlockArgumentInline {
+                        name: macro_name.to_string(),
+                        param: stem.to_string(),
+                    }
+                    .with_line(line_number));
+                };
+
+                // Rebuild the label/argument
+                rebuilt.push(if colon {
+                    format!("{argument}:")
+                } else {
+                    argument.clone()
+                });
+
+            // Else if the macro introduced this token uniquely and we should hygienically remap it, then do so.
+            } else if macro_def.introduced.iter().any(|intro| intro == stem) {
+                rebuilt.push(if colon {
+                    format!("{stem}#macro_{id}:")
+                } else {
+                    format!("{stem}#macro_{id}")
+                });
+            } else {
+                rebuilt.push(token.to_string());
+            }
+        }
+
+        out.push(rebuilt.join(" "));
+    }
+
+    Ok(out)
 }

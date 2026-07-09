@@ -114,7 +114,14 @@ pub enum LoweringErrorKind {
     ///  the expansion of a macro
     UnterminatedBlock {
         name: String
-    }
+    },
+
+    /// A block argument was used in-line for this param
+    /// is not supported, only alone can it be used.
+    BlockArgumentInline { 
+        name: String,
+        param: String 
+    },
 }
 
 /// Located version of `LoweringErrorKind`
@@ -211,6 +218,12 @@ impl Display for LoweringErrorKind {
                 write!(
                     f,
                     "The macro `{name}` during expansion contains an unterminated block!"
+                )
+            }
+            Self::BlockArgumentInline { name, param } => {
+                write!(
+                    f,
+                    "The macro `{name}` during expansion encounted the block-type parameter `{param}` being used in an in-line context!"
                 )
             }
             Self::DuplicateMacro { name } => {
