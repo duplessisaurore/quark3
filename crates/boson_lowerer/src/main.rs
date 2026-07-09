@@ -23,7 +23,7 @@ pub mod macroprocessor;
 use clap::Parser;
 use std::{fs, path::PathBuf, process};
 
-use crate::preprocessor::BosonLowerer;
+use crate::{macroprocessor::MacroExpander, preprocessor::BosonLowerer};
 
 #[derive(Parser)]
 #[command(
@@ -55,8 +55,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         process::exit(1);
     });
 
+    // Expand macros in input source
+    let expander = MacroExpander::new(&source, macro_expansion_limit);
+    let expanded = expander.expand().unwrap_or_else(|e| {
+        eprintln!("macro expansion error: {e}");
+        process::exit(1);
+    });
+
     // Lower input source
-    let lowerer: BosonLowerer<'_> = BosonLowerer::new(&source);
+    let lowerer= BosonLowerer::new(&expanded);
     let lowered = lowerer.lower().unwrap_or_else(|e| {
         eprintln!("lowering error: {e}");
         process::exit(1);
