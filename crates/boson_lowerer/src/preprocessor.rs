@@ -275,7 +275,7 @@ impl<'source> BosonLowerer<'source> {
                 }
 
                 // These @local directives are invalid..
-                collected if collected[0].starts_with("@local") => {
+                ["@local", ..]=> {
                     return Err(LoweringErrorKind::InvalidArgument {
                         expected: "@local <name>".to_string(),
                         got: tokens.join(" "),

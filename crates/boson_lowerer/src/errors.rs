@@ -70,6 +70,20 @@ pub enum LoweringErrorKind {
         object_name: String,
         field: String,
     },
+
+    /// A nested macro definition was found, this is
+    /// not permitted!
+    NestedMacroDefinition,
+
+    /// A macro was defined without the corresponding @end
+    UnterminatedMacro {
+        name: String,
+    },
+
+    /// Two macros were defined with the same name
+    DuplicateMacro {
+        name: String,
+    }
 }
 
 /// Located version of `LoweringErrorKind`
@@ -148,6 +162,24 @@ impl Display for LoweringErrorKind {
                 write!(
                     f,
                     "Attempted to declare local with name `{local_name}` outside of a function!"
+                )
+            }
+            Self::NestedMacroDefinition => {
+                write!(
+                    f,
+                    "Found a nested macro definition! Move the nested definition out and call it using the macro call syntax!"
+                )
+            }
+            Self::UnterminatedMacro { name } => {
+                write!(
+                    f,
+                    "The macro `{name}` does not have a corresponding `@end` directive!"
+                )
+            }
+            Self::DuplicateMacro { name } => {
+                write!(
+                    f,
+                    "The macro `{name}` was found to have more than one definition (duplicate)!"
                 )
             }
         }
