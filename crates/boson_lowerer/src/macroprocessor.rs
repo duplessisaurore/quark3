@@ -36,17 +36,17 @@ enum MacroArg {
 /// This takes some source input and outputs a macro-expanded
 /// version of the source with all `@macro` directives removed.
 #[derive(Debug)]
-pub struct MacroExpander {
+pub struct MacroExpander<'source> {
     /// All collected macro definitions by name.
     macros: HashMap<String, Macro>,
 
     /// The input source file we are expanding.
-    source: String,
+    source: &'source str,
 
     /// The expanded output lines.
     out: Vec<String>,
 
-    /// How many cycles have run so far of expansion
+    /// How many expansions have run so far
     expansions: u64,
 
     /// The maximum allowed number of expansions to permit
@@ -54,10 +54,10 @@ pub struct MacroExpander {
     max_expansions: u64,
 }
 
-impl MacroExpander {
+impl<'source> MacroExpander<'source> {
     /// Creates a new `Boson3` macro expander, this is responsible
     /// for expanding the `Boson3` macros out
-    pub fn new(source: String, max_expansions: u64) -> Self {
+    pub fn new(source: &'source str, max_expansions: u64) -> Self {
         Self {
             macros: HashMap::new(),
             source,
@@ -189,10 +189,73 @@ impl MacroExpander {
             }
         }
 
-        // Update source because now we've collected macros we don't need to keep them
-        self.source = collected_out_buf.join("\n");
+        // Update out because now we've collected macros we now
+        // then repeatedly expand on output
+        self.out = collected_out_buf;
 
         Ok(())
+    }
+
+    /// Runs the expansion of macros on the current self.out
+    /// 
+    /// This returns whether or not a macro was seen this pass.
+    fn expand_lines(&mut self) -> Result<bool, LoweringError> {
+        // The current source of our expansion pass
+        let current_expansion_source = std::mem::take(&mut self.out);
+        let mut lines = current_expansion_source.into_iter().enumerate();
+
+        // The destination of all expanded things from this pass
+        let mut current_expansion_out = vec![];
+
+        // Whether or not a macro invocation was found this pass
+        let mut found_macro_invocation = false;
+
+        while let Some((line_number, line)) = lines.next() {
+            let line_number = line_number + 1;
+
+            // Strip the comment from a line and ignore if empty, this means
+            // we only parse actual tokens
+            let line = strip_comment(&line).trim();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+
+            match tokens.as_slice() {
+                // !<name> <arg> { <arg> } ...
+                [invocation, rest @ ..] if invocation.starts_with("!") => {
+                    // Grab the name of the macro we are
+                    let name = invocation.trim_prefix("!");
+                    found_macro_invocation = true;
+
+                    let Some(macro_def) = self.macros.get(name) else {
+                        return Err(LoweringErrorKind::UndefinedMacro {
+                            name: name.to_string(),
+                        }
+                        .with_line(line_number));
+                    };
+                    // Make sure we are under the expansion limit to prevent infinitely-recursive expansions.
+                    self.expansions += 1;
+
+                    if self.expansions > self.max_expansions {
+                        return Err(LoweringErrorKind::ExpansionLimit {
+                            name: name.to_string(),
+                        }
+                        .with_line(line_number));
+                    }
+                }
+
+                // Everything else passes through untouched.
+                other => current_expansion_out.push(other.join(" ")),
+            }
+        }
+
+        // Update the output from this pass
+        self.out = current_expansion_out;
+
+        Ok(found_macro_invocation)
     }
 }
 

@@ -83,6 +83,18 @@ pub enum LoweringErrorKind {
     /// Two macros were defined with the same name
     DuplicateMacro {
         name: String,
+    },
+
+    /// Attempted to invoke an invalid macro which was
+    /// not defined
+    UndefinedMacro {
+        name: String
+    },
+
+    /// We hit the expansion limit and are no longer continuing
+    ExpansionLimit {
+        // This is the macro which we hit the limit in
+        name: String
     }
 }
 
@@ -181,6 +193,12 @@ impl Display for LoweringErrorKind {
                     f,
                     "The macro `{name}` was found to have more than one definition (duplicate)!"
                 )
+            }
+            Self::UndefinedMacro { name } => {
+                write!(f, "The macro `{name}` was not defined")
+            }
+            Self::ExpansionLimit { name } => {
+                write!(f, "While expanding the macro `{name}`, the macro expansion limit was hit!")
             }
         }
     }
