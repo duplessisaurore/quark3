@@ -543,6 +543,45 @@ push.uint 0
 call.cap
 ```
 
+### Macros
+
+`Boson3` provides a `macro` system using the `@macro` directive. This is a simple system, but can be really powerful!
+
+A macro is defined between `@macro` and `@end`, taking a list of named parameters:
+
+```
+// This replicates a "let" statement as seen in other languages.
+@macro let (name, init)
+    @local name
+    init
+    store.local name
+@end
+```
+
+Each macro can be invoked by name with the `!` prefix, giving one argument per parameter similar to instructions.
+
+```
+// An argument can either be a simple token, like "total" here
+// or a block of lines wrapped in `{}`
+!let total { push.int 0 }
+```
+
+A macro invocation is simple, all the arguments are simply spliced by name into the macro's body wherever the matching name appears. 
+
+The above `!let total { push.int }` would expand to:
+
+```
+@local total
+push.int 0
+store.local total
+```
+
+Macros automatically have hygiene for `@local <name>` and `label:`. Each `@local <name>` and `label:` defined automatically has a unique id appended to the name or label for hygiene.
+
+The exception is when `@local` is passed a parameter of the macro which preserves the name, such as in `let` above.
+
+Macros can also call other macros, there is a recursive expansion limit in place adjustable as the arguments to the lowerer.
+
 <a name="gluon3-linker"></a>
 ## 🕸 Gluon3 Linker
 

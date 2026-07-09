@@ -9,6 +9,8 @@
 //!
 //! The `Boson3` crate is a crate that desugars some extra `Boson3` syntax
 //! ontop of `Quark3`, view the `README.md` in the repository.
+//! 
+//! `Boson3` also adds macros which are done by the `macroprocessor`
 
 #![feature(trim_prefix_suffix)]
 
@@ -16,6 +18,7 @@ use std::error::Error;
 
 pub mod errors;
 pub mod preprocessor;
+pub mod macroprocessor;
 
 use clap::Parser;
 use std::{fs, path::PathBuf, process};
@@ -33,6 +36,10 @@ struct Cli {
 
     /// Output Quark3 source file
     output: PathBuf,
+
+    // Optional recursive macro expansion limit
+    #[arg(long, short, default_value_t = 10000)]
+    macro_expansion_limit: u64,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -40,6 +47,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let input_path = &cli.input;
     let output_path = &cli.output;
+    let macro_expansion_limit = cli.macro_expansion_limit;
 
     // Read source file
     let source = fs::read_to_string(input_path).unwrap_or_else(|e| {
