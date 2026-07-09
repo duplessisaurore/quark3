@@ -194,15 +194,12 @@ impl<'source> BosonLowerer<'source> {
 
             match tokens.as_slice() {
                 // @fn <name> <args> (arg_names, ...)
-                function
-                    if function.iter().any(|tok| tok.starts_with("@fn")) && function.len() >= 4 =>
-                {
-                    // Parse <name> and <args>
-                    let name = function[1];
-                    let args_count = parse_u64(line_number, function[2])?;
+                ["@fn", name, arg_count, args  @ ..] => {
+                    // Parse <args>
+                    let args_count = parse_u64(line_number, *arg_count)?;
 
                     // Remaining elements which are arg names
-                    let args = function[3..].join(" ");
+                    let args = args.join(" ");
                     
                     // Must start with "("
                     if !args.starts_with("(") {
