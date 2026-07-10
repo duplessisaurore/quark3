@@ -38,6 +38,10 @@ struct Cli {
     // Optional recursive macro expansion limit
     #[arg(long, short, default_value_t = 10000)]
     macro_expansion_limit: u64,
+
+    // Optional file to write the expanded macro output to before lowering
+    #[arg(long, short)]
+    expanded_output: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -59,6 +63,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         eprintln!("macro expansion error: {e}");
         process::exit(1);
     });
+
+    // Write macro expanded output out if wanted
+    if let Some(macro_output_file) = &cli.expanded_output {
+        fs::write(macro_output_file, &expanded).unwrap_or_else(|e| {
+            eprintln!("error writing {}: {e}", macro_output_file.display());
+            process::exit(1);
+        });
+        println!(
+            "boson3 macro expansion {} -> {}",
+            input_path.display(),
+            macro_output_file.display()
+        );
+    }
 
     // Lower input source
     let lowerer = BosonLowerer::new(&expanded);

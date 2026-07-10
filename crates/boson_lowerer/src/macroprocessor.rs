@@ -105,7 +105,7 @@ impl<'source> MacroExpander<'source> {
                     // Parse parameters
                     // Must start with "("
                     let string_params = params.join(" ");
-                    if !string_params.starts_with("(") {
+                    if !string_params.starts_with("(") || !string_params.ends_with(")") {
                         return Err(LoweringErrorKind::InvalidArgument {
                             expected: "@macro <name> (<param>, <param>, ...)".to_string(),
                             got: tokens.join(" "),
@@ -113,14 +113,19 @@ impl<'source> MacroExpander<'source> {
                         .with_line(line_number));
                     }
 
-                    let param_names = string_params
+                    let mut param_names = string_params
                         .strip_prefix("(")
                         .unwrap_or(&string_params)
                         .strip_suffix(")")
                         .unwrap_or(&string_params)
                         .split(",")
-                        .map(|split_str| split_str.to_string())
+                        .map(|split_str| split_str.trim().to_string())
                         .collect::<Vec<String>>();
+
+                    // `()` should be no-params, similar to functions we clear param names
+                    if param_names.len() == 1 && param_names[0].is_empty() {
+                        param_names.clear();
+                    }
 
                     // Collect the body lines until the matching @end
                     let mut body = Vec::new();
@@ -276,7 +281,7 @@ impl<'source> MacroExpander<'source> {
                     )?;
 
                     // Push the expanded lines back into the output
-                    current_expansion_out.push(expanded.join("\n"))
+                    current_expansion_out.extend(expanded);
                 }
 
                 // Everything else passes through untouched.
@@ -363,6 +368,11 @@ fn parse_args(
                 .map(|token| token.to_string())
                 .collect();
 
+            // And ignore @loc lines to prevent accidentally eating them as input from the linker
+            if current.first().is_some_and(|token| token == "@loc") {
+                current.clear();
+            }
+
             continue;
         }
 
@@ -442,6 +452,7 @@ fn parse_block(
                 .split_whitespace()
                 .map(|token| token.to_string())
                 .collect();
+
             continue;
         }
 
