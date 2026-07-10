@@ -104,6 +104,9 @@ pub struct RemapMaps {
 
     // @object remap
     pub object_map: HashMap<String, String>,
+
+    // @macro remap
+    pub macro_map: HashMap<String, String>,
 }
 
 impl Linker {
@@ -197,6 +200,10 @@ impl Linker {
         let mut output = Vec::new();
         let mut errors = Vec::new();
 
+        // The current parameters of the macro body we are walking if any,
+        // we need to NOT remap macro params inserted in-line and stuff so this is for that!
+        let mut macro_params: Option<Vec<String>> = None;
+
         // Remap-maps
         let remap_maps = file
             .remap_maps
@@ -207,6 +214,7 @@ impl Linker {
         let function_map = &remap_maps.function_map;
         let capability_map = &remap_maps.capability_map;
         let object_map = &remap_maps.object_map;
+        let macro_map = &remap_maps.macro_map;
 
         // The pass, remap all instructions now with names
         for (line_number, line) in file.file_contents.lines().enumerate() {
@@ -223,11 +231,38 @@ impl Linker {
             let tokens: Vec<&str> = line.split_whitespace().collect();
 
             match tokens.as_slice() {
+                // @macro <name> (<param>, ...) opens a macro body,
+                // we should be careful to not replace any of the params with remapped things
+                ["@macro", _, params @ ..] => {
+                    let param_names = params
+                        .join(" ")
+                        .replace(['(', ')', ','], " ")
+                        .split_whitespace()
+                        .map(|name| name.to_string())
+                        .collect();
+                    macro_params = Some(param_names);
+                    output.push(tokens.join(" "));
+                }
+
+                // @end closes a macro body
+                ["@end", ..] => {
+                    macro_params = None;
+                    output.push(tokens.join(" "));
+                }
+
                 // globals remapping
                 [
                     op @ ("store.global" | "load.global" | "log" | "stg"),
                     global,
                 ] => {
+                    // Do not overwrite macro params!
+                    if let Some(params) = &macro_params {
+                        if params.iter().any(|param| param == global) {
+                            output.push(format!("{op} {global}"));
+                            continue;
+                        }
+                    }
+
                     // Get the name from the map, else test if its in the valid symbols map.
                     let new_global_name = match globals_map.get(*global).ok_or_else(|| {
                         LinkerErrorKind::UndefinedName {
@@ -256,6 +291,14 @@ impl Linker {
 
                 // object remapping
                 [op @ ("object.new" | "onw"), object] => {
+                    // Do not overwrite macro params!
+                    if let Some(params) = &macro_params {
+                        if params.iter().any(|param| param == object) {
+                            output.push(format!("{op} {object}"));
+                            continue;
+                        }
+                    }
+
                     let new_object_name = match object_map.get(*object).ok_or_else(|| {
                         LinkerErrorKind::UndefinedName {
                             name: object.to_string(),
@@ -282,11 +325,20 @@ impl Linker {
                 }
 
                 [op @ ("object.set" | "ost" | "object.get" | "ogt"), object] => {
+                    // Do not overwrite macro params! (they dont have dots anyway)
+                    if let Some(params) = &macro_params {
+                        if params.iter().any(|param| param == object) {
+                            output.push(format!("{op} {object}"));
+                            continue;
+                        }
+                    }
+
                     // We the field and object name (2 elements)
                     let split_access = object.split(".").collect::<Vec<_>>();
 
                     // Fail in lowering.
                     if split_access.len() != 2 {
+                        output.push(split_access.join(" "));
                         continue;
                     }
 
@@ -320,6 +372,14 @@ impl Linker {
 
                 // function remapping
                 [op @ ("call" | "cal" | "tail.call" | "tcl"), function] => {
+                    // Do not overwrite macro params!
+                    if let Some(params) = &macro_params {
+                        if params.iter().any(|param: &String| param == function) {
+                            output.push(format!("{op} {function}"));
+                            continue;
+                        }
+                    }
+
                     let new_function_name = match function_map.get(*function).ok_or_else(|| {
                         LinkerErrorKind::UndefinedName {
                             name: function.to_string(),
@@ -347,6 +407,14 @@ impl Linker {
 
                 // capabilities remapping
                 [op @ ("call.cap" | "cap"), capability] => {
+                    // Do not overwrite macro params!
+                    if let Some(params) = &macro_params {
+                        if params.iter().any(|param| param == capability) {
+                            output.push(format!("{op} {capability}"));
+                            continue;
+                        }
+                    }
+
                     let new_capability_name =
                         match capability_map.get(*capability).ok_or_else(|| {
                             LinkerErrorKind::UndefinedName {
@@ -368,6 +436,41 @@ impl Linker {
                     push_out(
                         &file.full_file_name,
                         format!("{op} {new_capability_name}"),
+                        line_number,
+                        &mut output,
+                    );
+                }
+
+                // A macro invocation remapping
+                [invocation, args @ ..] if invocation.starts_with("!") => {
+                    // The name of the macro
+                    let name = invocation.strip_prefix("!").unwrap_or(*invocation);
+
+                    // Find new remapped name
+                    let new_macro_name = match macro_map.get(name).ok_or_else(|| {
+                        LinkerErrorKind::UndefinedName {
+                            name: name.to_string(),
+                        }
+                        .with_line(line_number, file.full_file_name.clone())
+                    }) {
+                        Ok(name) => name,
+                        Err(error) => {
+                            if valid_symbols.contains(name) {
+                                name
+                            } else {
+                                errors.push(error);
+                                continue;
+                            }
+                        }
+                    };
+
+                    // Rebuild new macro invocation with all the arguments
+                    let mut rebuilt = vec![format!("!{new_macro_name}")];
+                    rebuilt.extend(args.iter().map(|token| token.to_string()));
+
+                    push_out(
+                        &file.full_file_name,
+                        rebuilt.join(" "),
                         line_number,
                         &mut output,
                     );
@@ -413,6 +516,7 @@ impl Linker {
         let mut function_map = HashMap::new();
         let mut capability_map = HashMap::new();
         let mut object_map = HashMap::new();
+        let mut macro_map = HashMap::new();
 
         let file_namespace = file
             .namespace
@@ -440,34 +544,27 @@ impl Linker {
                 }
 
                 // @fn <name>
-                function
-                    if function.iter().any(|tok| tok.starts_with("@fn")) && function.len() > 1 =>
-                {
-                    let name = function[1];
-
+                ["@fn", name, ..] => {
                     let remapped = format!("{}::{}", file_namespace, name);
                     function_map.insert(name.to_string(), remapped);
                 }
 
                 // @object <name>
-                object
-                    if object.iter().any(|tok| tok.starts_with("@object")) && object.len() > 1 =>
-                {
-                    let name = object[1];
-
+                ["@object", name, ..] => {
                     let remapped = format!("{}::{}", file_namespace, name);
                     object_map.insert(name.to_string(), remapped);
                 }
 
                 // @capability <name>
-                capability
-                    if capability.iter().any(|tok| tok.starts_with("@capability"))
-                        && capability.len() > 1 =>
-                {
-                    let name = capability[1];
-
+                ["@capability", name, ..] => {
                     let remapped = format!("{}::{}", file_namespace, name);
                     capability_map.insert(name.to_string(), remapped);
+                }
+
+                // @macro <name> (args)
+                ["@macro", name, ..] => {
+                    let remapped = format!("{}::{}", file_namespace, name);
+                    macro_map.insert(name.to_string(), remapped);
                 }
 
                 // Non-remappable things
@@ -497,11 +594,13 @@ impl Linker {
                         || remap_directive[0].starts_with("@object")
                         || remap_directive[0].starts_with("@global")
                         || remap_directive[0].starts_with("@fn")
-                        || remap_directive[0].starts_with("@entry") =>
+                        || remap_directive[0].starts_with("@entry")
+                        || remap_directive[0].starts_with("@macro") =>
                 {
                     // ???, let another phase handle
                     if remap_directive.len() < 2 {
                         output.push(remap_directive.join(" "));
+                        continue;
                     }
 
                     let remap_type = remap_directive[0];
@@ -531,6 +630,13 @@ impl Linker {
                         }),
 
                         "@fn" => function_map.get(name).ok_or_else(|| {
+                            LinkerErrorKind::UndefinedName {
+                                name: name.to_string(),
+                            }
+                            .with_line(line_number, file.full_file_name.clone())
+                        }),
+
+                        "@macro" => macro_map.get(name).ok_or_else(|| {
                             LinkerErrorKind::UndefinedName {
                                 name: name.to_string(),
                             }
@@ -585,7 +691,8 @@ impl Linker {
                 .cloned()
                 .chain(capability_map.values().cloned())
                 .chain(function_map.values().cloned())
-                .chain(object_map.values().cloned()),
+                .chain(object_map.values().cloned())
+                .chain(macro_map.values().cloned()),
         );
 
         // Build the remap-map for this file
@@ -594,6 +701,7 @@ impl Linker {
             function_map,
             capability_map,
             object_map,
+            macro_map,
         };
 
         file.remap_maps = Some(remap_map);
