@@ -295,14 +295,14 @@ impl Linker {
 
                     let new_object_name = match object_map.get(object_name).ok_or_else(|| {
                         LinkerErrorKind::UndefinedName {
-                            name: object.to_string(),
+                            name: object_name.to_string(),
                         }
                         .with_line(line_number, file.full_file_name.clone())
                     }) {
                         Ok(name) => name,
                         Err(error) => {
-                            if valid_symbols.contains(*object) {
-                                *object
+                            if valid_symbols.contains(object_name) {
+                                object_name
                             } else {
                                 errors.push(error);
                                 continue;
