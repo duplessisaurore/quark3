@@ -18,7 +18,7 @@ use quark_debug::image::DebugStrippableImage;
 use std::{error::Error, fs, path::PathBuf, process};
 
 // Bump if necessary to match `Lepton3` version
-const VERSION_MAJOR: u8 = 1;
+const VERSION_MAJOR: u8 = 2;
 
 #[derive(Parser)]
 #[command(

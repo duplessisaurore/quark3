@@ -65,6 +65,9 @@ pub struct Linker {
 
     // The global remapped valid symbols
     valid_symbols: HashSet<String>,
+
+    // The filename to filename indxs for loc mapping
+    loc_maps: HashMap<String, usize>,
 }
 
 /// The linkable file, this contains
@@ -118,16 +121,31 @@ impl Linker {
             namespaces: HashSet::new(),
             namespace_map: HashMap::new(),
             valid_symbols: HashSet::new(),
+            loc_maps: HashMap::new(),
         }
     }
 
     /// Links all the files together, returns the outputted linked
     /// together `Boson3` file.
     pub fn link(mut self) -> Result<String, Vec<LinkerError>> {
+        // Create file index maps
+        for (i, file) in self.sources.iter().enumerate() {
+            self.loc_maps.insert(file.full_file_name.clone(), i);
+        }
+
         self.collect_namespaces().map_err(|err| vec![err])?;
         self.check_all_requires()?;
         self.remap_all_top_levels()?;
         self.remap_all_instructions()?;
+
+        // Create file table first
+        self.output.push("// File table for locs\n".to_string());
+        for (i, file) in self.sources.iter().enumerate() {
+            self.output
+                .push(format!("@file {} {}\n", i, file.full_file_name))
+        }
+
+        self.output.push("\n".to_string());
 
         // Combine all files together into the output
         for file in self.sources {
@@ -174,7 +192,7 @@ impl Linker {
 
         // Remap each file's instructions
         for file in &mut self.sources {
-            if let Err(this_errors) = Linker::remap_instructions(&valid_map, file) {
+            if let Err(this_errors) = Linker::remap_instructions(&self.loc_maps, &valid_map, file) {
                 errors.extend(this_errors);
             }
         }
@@ -193,6 +211,7 @@ impl Linker {
     ///
     /// This assumes the remap map was already defined in the file
     fn remap_instructions(
+        loc_maps: &HashMap<String, usize>,
         valid_symbols: &HashSet<String>,
         file: &mut LinkableFile,
     ) -> Result<(), Vec<LinkerError>> {
@@ -256,11 +275,11 @@ impl Linker {
                     global,
                 ] => {
                     // Do not overwrite macro params!
-                    if let Some(params) = &macro_params {
-                        if params.iter().any(|param| param == global) {
-                            output.push(format!("{op} {global}"));
-                            continue;
-                        }
+                    if let Some(params) = &macro_params
+                        && params.iter().any(|param| param == global)
+                    {
+                        output.push(format!("{op} {global}"));
+                        continue;
                     }
 
                     // Get the name from the map, else test if its in the valid symbols map.
@@ -282,7 +301,7 @@ impl Linker {
                     };
 
                     push_out(
-                        &file.full_file_name,
+                        get_file_idx(loc_maps, &file.full_file_name),
                         format!("{op} {new_global_name}"),
                         line_number,
                         &mut output,
@@ -292,11 +311,11 @@ impl Linker {
                 // object remapping
                 [op @ ("object.new" | "onw"), object] => {
                     // Do not overwrite macro params!
-                    if let Some(params) = &macro_params {
-                        if params.iter().any(|param| param == object) {
-                            output.push(format!("{op} {object}"));
-                            continue;
-                        }
+                    if let Some(params) = &macro_params
+                        && params.iter().any(|param| param == object)
+                    {
+                        output.push(format!("{op} {object}"));
+                        continue;
                     }
 
                     let new_object_name = match object_map.get(*object).ok_or_else(|| {
@@ -317,7 +336,7 @@ impl Linker {
                     };
 
                     push_out(
-                        &file.full_file_name,
+                        get_file_idx(loc_maps, &file.full_file_name),
                         format!("{op} {new_object_name}"),
                         line_number,
                         &mut output,
@@ -326,11 +345,11 @@ impl Linker {
 
                 [op @ ("object.set" | "ost" | "object.get" | "ogt"), object] => {
                     // Do not overwrite macro params! (they dont have dots anyway)
-                    if let Some(params) = &macro_params {
-                        if params.iter().any(|param| param == object) {
-                            output.push(format!("{op} {object}"));
-                            continue;
-                        }
+                    if let Some(params) = &macro_params
+                        && params.iter().any(|param| param == object)
+                    {
+                        output.push(format!("{op} {object}"));
+                        continue;
                     }
 
                     // We the field and object name (2 elements)
@@ -338,7 +357,7 @@ impl Linker {
 
                     // Fail in lowering.
                     if split_access.len() != 2 {
-                        output.push(split_access.join(" "));
+                        output.push(tokens.join(" "));
                         continue;
                     }
 
@@ -363,7 +382,7 @@ impl Linker {
                     };
 
                     push_out(
-                        &file.full_file_name,
+                        get_file_idx(loc_maps, &file.full_file_name),
                         format!("{op} {new_object_name}.{field}"),
                         line_number,
                         &mut output,
@@ -373,11 +392,11 @@ impl Linker {
                 // function remapping
                 [op @ ("call" | "cal" | "tail.call" | "tcl"), function] => {
                     // Do not overwrite macro params!
-                    if let Some(params) = &macro_params {
-                        if params.iter().any(|param: &String| param == function) {
-                            output.push(format!("{op} {function}"));
-                            continue;
-                        }
+                    if let Some(params) = &macro_params
+                        && params.iter().any(|param: &String| param == function)
+                    {
+                        output.push(format!("{op} {function}"));
+                        continue;
                     }
 
                     let new_function_name = match function_map.get(*function).ok_or_else(|| {
@@ -398,7 +417,7 @@ impl Linker {
                     };
 
                     push_out(
-                        &file.full_file_name,
+                        get_file_idx(loc_maps, &file.full_file_name),
                         format!("{op} {new_function_name}"),
                         line_number,
                         &mut output,
@@ -408,11 +427,11 @@ impl Linker {
                 // capabilities remapping
                 [op @ ("call.cap" | "cap"), capability] => {
                     // Do not overwrite macro params!
-                    if let Some(params) = &macro_params {
-                        if params.iter().any(|param| param == capability) {
-                            output.push(format!("{op} {capability}"));
-                            continue;
-                        }
+                    if let Some(params) = &macro_params
+                        && params.iter().any(|param| param == capability)
+                    {
+                        output.push(format!("{op} {capability}"));
+                        continue;
                     }
 
                     let new_capability_name =
@@ -434,7 +453,7 @@ impl Linker {
                         };
 
                     push_out(
-                        &file.full_file_name,
+                        get_file_idx(loc_maps, &file.full_file_name),
                         format!("{op} {new_capability_name}"),
                         line_number,
                         &mut output,
@@ -465,11 +484,15 @@ impl Linker {
                     };
 
                     // Rebuild new macro invocation with all the arguments
-                    let mut rebuilt = vec![format!("!{new_macro_name}")];
+                    let mut rebuilt = vec![format!(
+                        "!{new_macro_name} {} {}",
+                        get_file_idx(loc_maps, &file.full_file_name),
+                        line_number
+                    )];
                     rebuilt.extend(args.iter().map(|token| token.to_string()));
 
                     push_out(
-                        &file.full_file_name,
+                        get_file_idx(loc_maps, &file.full_file_name),
                         rebuilt.join(" "),
                         line_number,
                         &mut output,
@@ -483,7 +506,7 @@ impl Linker {
 
                 // Non-remappable things
                 other => push_out(
-                    &file.full_file_name,
+                    get_file_idx(loc_maps, &file.full_file_name),
                     other.join(" "),
                     line_number,
                     &mut output,
@@ -905,14 +928,21 @@ impl Display for LinkerError {
 
 /// Inserts a @loc directive at the current position with the source
 /// being the original boson3 file
-fn insert_loc(filename: &str, line_number: usize, output: &mut Vec<String>) {
-    output.push(format!("@loc {} {line_number} 0", filename))
+fn insert_loc(file_idx: usize, line_number: usize, output: &mut Vec<String>) {
+    output.push(format!("@loc {file_idx} {line_number} 0"))
 }
 
 /// Pushes a line of output to the `output`, with a LOC attached.
 ///
 /// This should be used for instructions, not directives.
-fn push_out(file_name: &str, contents: String, line_number: usize, output: &mut Vec<String>) {
-    insert_loc(file_name, line_number, output);
+fn push_out(file_idx: usize, contents: String, line_number: usize, output: &mut Vec<String>) {
+    insert_loc(file_idx, line_number, output);
     output.push(contents);
+}
+
+/// Get the file index for this files name
+fn get_file_idx(loc_maps: &HashMap<String, usize>, file_name: &str) -> usize {
+    *loc_maps
+        .get(file_name)
+        .expect("expected file name to be already in file loc maps")
 }

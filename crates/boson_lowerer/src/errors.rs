@@ -122,6 +122,11 @@ pub enum LoweringErrorKind {
         name: String,
         param: String,
     },
+
+    /// File index was not found in the file table
+    FileIndexNotDefined {
+        index: u64,
+    },
 }
 
 /// Located version of `LoweringErrorKind`
@@ -255,6 +260,12 @@ impl Display for LoweringErrorKind {
                 write!(
                     f,
                     "The invocation of the macro `{name}` expected `{expected}` args, got `{got}`."
+                )
+            }
+            Self::FileIndexNotDefined { index } => {
+                write!(
+                    f,
+                    "the file index `{index}` was referenced but it was not defined"
                 )
             }
         }

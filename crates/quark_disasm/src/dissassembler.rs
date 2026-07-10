@@ -320,6 +320,7 @@ fn decode_statements(
                 file.clone(),
                 loc.line as usize,
                 loc.column as usize,
+                loc.context.clone(),
             ));
         }
 

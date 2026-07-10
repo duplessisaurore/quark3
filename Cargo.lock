@@ -66,7 +66,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "boson_lowerer"
-version = "1.2.0"
+version = "2.2.0"
 dependencies = [
  "clap",
  "quark_map",
@@ -143,7 +143,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "gluon_linker"
-version = "1.1.0"
+version = "2.1.0"
 dependencies = [
  "clap",
 ]
@@ -173,8 +173,8 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "lepton3"
-version = "3.2.0"
-source = "git+https://github.com/duplessisaurore/lepton3#ddcc7da7bc26af09879dee6f9b0f6cafb77ea58c"
+version = "4.0.0"
+source = "git+https://github.com/duplessisaurore/lepton3#196f823e9962299faecc0c46d93055eaa397dbdc"
 dependencies = [
  "lepton_image",
  "lepton_opcodes",
@@ -183,8 +183,8 @@ dependencies = [
 
 [[package]]
 name = "lepton_image"
-version = "1.1.1"
-source = "git+https://github.com/duplessisaurore/lepton3#ddcc7da7bc26af09879dee6f9b0f6cafb77ea58c"
+version = "2.0.0"
+source = "git+https://github.com/duplessisaurore/lepton3#196f823e9962299faecc0c46d93055eaa397dbdc"
 dependencies = [
  "lepton_opcodes",
 ]
@@ -192,12 +192,12 @@ dependencies = [
 [[package]]
 name = "lepton_opcodes"
 version = "2.2.0"
-source = "git+https://github.com/duplessisaurore/lepton3#ddcc7da7bc26af09879dee6f9b0f6cafb77ea58c"
+source = "git+https://github.com/duplessisaurore/lepton3#196f823e9962299faecc0c46d93055eaa397dbdc"
 
 [[package]]
 name = "lepton_vm"
-version = "3.2.0"
-source = "git+https://github.com/duplessisaurore/lepton3#ddcc7da7bc26af09879dee6f9b0f6cafb77ea58c"
+version = "3.3.0"
+source = "git+https://github.com/duplessisaurore/lepton3#196f823e9962299faecc0c46d93055eaa397dbdc"
 dependencies = [
  "lepton_image",
  "lepton_opcodes",
@@ -232,7 +232,7 @@ dependencies = [
 
 [[package]]
 name = "quark3"
-version = "2.1.0"
+version = "3.1.0"
 dependencies = [
  "quark_asm",
  "quark_debug",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "quark_disasm"
-version = "2.1.0"
+version = "3.1.0"
 dependencies = [
  "hashbrown",
  "lepton3",

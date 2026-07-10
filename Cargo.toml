@@ -1,6 +1,6 @@
 [package]
 name = "quark3"
-version = "2.1.0"
+version = "3.1.0"
 edition = "2024"
 authors = ["The Quark3 Contributors"]
 

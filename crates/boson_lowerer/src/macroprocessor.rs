@@ -40,6 +40,9 @@ pub struct MacroExpander<'source> {
     /// All collected macro definitions by name.
     macros: HashMap<String, Macro>,
 
+    /// All the filenames for later mapping purposes
+    filenames: HashMap<u64, String>,
+
     /// The input source file we are expanding.
     source: &'source str,
 
@@ -64,6 +67,7 @@ impl<'source> MacroExpander<'source> {
             out: Vec::new(),
             expansions: 0,
             max_expansions,
+            filenames: HashMap::new(),
         }
     }
 
@@ -100,6 +104,16 @@ impl<'source> MacroExpander<'source> {
             let tokens: Vec<&str> = line.split_whitespace().collect();
 
             match tokens.as_slice() {
+                // @file declaration
+                ["@file", file_idx, path @ ..] => {
+                    // Parse the file index for the file table
+                    let file_index = parse_u64(line_number, file_idx)?;
+
+                    // Path in the mapping for later
+                    self.filenames.insert(file_index, path.join(" "));
+                    collected_out_buf.push(line.to_string());
+                }
+
                 // @macro <name> (<param>, <param>, ...)
                 ["@macro", name, params @ ..] => {
                     // Parse parameters
@@ -243,8 +257,10 @@ impl<'source> MacroExpander<'source> {
             let tokens: Vec<&str> = line.split_whitespace().collect();
 
             match tokens.as_slice() {
-                // !<name> <arg> { <arg> } ...
-                [invocation, rest @ ..] if invocation.starts_with("!") => {
+                // !<name> <file_idx> <original_line> <arg> { <arg> } ...
+                [invocation, file_indx, original_line, rest @ ..]
+                    if invocation.starts_with("!") =>
+                {
                     // Grab the name of the macro we are
                     let name = invocation.strip_prefix("!").unwrap_or(*invocation);
                     found_macro_invocation = true;
@@ -255,6 +271,14 @@ impl<'source> MacroExpander<'source> {
                         }
                         .with_line(line_number));
                     };
+
+                    // Grab the file index and get the actual name
+                    let file_index = parse_u64(line_number, file_indx)?;
+                    let original_line = parse_u64(line_number, original_line)?;
+                    let file_name = self.filenames.get(&file_index).ok_or_else(|| {
+                        LoweringErrorKind::FileIndexNotDefined { index: file_index }
+                            .with_line(line_number)
+                    })?;
 
                     // Make sure we are under the expansion limit to prevent infinitely-recursive expansions.
                     self.expansions += 1;
@@ -273,11 +297,13 @@ impl<'source> MacroExpander<'source> {
 
                     // Expand the actual macro here
                     let expanded = expand_macro_out_into_lines(
+                        file_name,
                         macro_def,
                         &args,
                         self.expansions,
                         name,
                         line_number,
+                        original_line,
                     )?;
 
                     // Push the expanded lines back into the output
@@ -497,11 +523,13 @@ fn parse_block(
 /// This essentially just takes the macro def, all arguments
 /// and the unique ID of this macro for hygiene reasons./
 fn expand_macro_out_into_lines(
+    file_name: &String,
     macro_def: &Macro,
     args: &[MacroArg],
     id: u64,
     macro_name: &str,
     line_number: usize,
+    loc_match_line: u64,
 ) -> Result<Vec<String>, LoweringError> {
     // The output lines of this macro expansion
     let mut out = Vec::new();
@@ -524,6 +552,18 @@ fn expand_macro_out_into_lines(
                 }
                 continue;
             }
+        }
+
+        // Update macro context with invocation info
+        if let ["@loc", rest @ ..] = tokens.as_slice() {
+            out.push(format!(
+                "@loc {} macro {} invoked in {} at line {}",
+                rest.join(" "),
+                macro_name,
+                file_name,
+                loc_match_line
+            ));
+            continue;
         }
 
         // Otherwise the line is rebuilt token by token since params maybe in-line
@@ -575,4 +615,20 @@ fn expand_macro_out_into_lines(
     }
 
     Ok(out)
+}
+
+/// Parse a u64 from a string token
+///
+/// # Errors
+///
+/// This will error with a `LoweringError::InvalidArgument` if the
+/// string token cannot be successfully converted to a `u64`
+fn parse_u64(line: usize, token: &str) -> Result<u64, LoweringError> {
+    token.parse::<u64>().map_err(|_| {
+        LoweringErrorKind::InvalidArgument {
+            expected: "64-Bit Unsigned Integer".to_string(),
+            got: token.to_string(),
+        }
+        .with_line(line)
+    })
 }

@@ -3,6 +3,7 @@
 
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use core::fmt::{Display, Write};
 use quark_asm::parser::{Instruction, ParsedFile, Statement};
 use quark_map::long_from_opcode;
@@ -13,6 +14,27 @@ pub fn pretty_print(source: impl Display, file: &ParsedFile) -> String {
 
     // source file header content
     let _ = writeln!(out, "// Disassembled from {source}");
+
+    // Rebuild the file table
+    let mut files: Vec<&str> = Vec::new();
+    for func in &file.functions {
+        for stmt in &func.body {
+            // Push all the file into the file table
+            if let Statement::SourceLocation(name, ..) = stmt
+                && !files.contains(&name.as_str())
+            {
+                files.push(name.as_str());
+            }
+        }
+    }
+
+    // Push out all @file's back out for @loc's.
+    if !files.is_empty() {
+        for (idx, name) in files.iter().enumerate() {
+            let _ = writeln!(out, "@file {idx} \"{name}\"");
+        }
+        out.push('\n');
+    }
 
     // @entry
     if let Some(entry) = &file.entry {
@@ -38,8 +60,12 @@ pub fn pretty_print(source: impl Display, file: &ParsedFile) -> String {
                     let _ = writeln!(out, "{name}:");
                 }
 
-                Statement::SourceLocation(file, line, col) => {
-                    let _ = writeln!(out, "    @loc {file} {line} {col}");
+                Statement::SourceLocation(name, line, col, context) => {
+                    let idx = files
+                        .iter()
+                        .position(|file| *file == name.as_str())
+                        .unwrap_or(0);
+                    let _ = writeln!(out, "    @loc {idx} {line} {col} {context}");
                 }
 
                 Statement::Instruction(instr, _) => {

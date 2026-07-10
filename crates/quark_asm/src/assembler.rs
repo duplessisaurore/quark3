@@ -223,7 +223,7 @@ pub fn assemble(
 
                 // A sourcelocation is a seperate directive that does not
                 // contribute to size
-                Statement::SourceLocation(_, _, _) => {}
+                Statement::SourceLocation(_, _, _, _) => {}
             }
         }
 
@@ -242,7 +242,7 @@ pub fn assemble(
                     )?;
                 }
                 // Emit a source location into the debug info
-                Statement::SourceLocation(file_path, line, col) => {
+                Statement::SourceLocation(file_path, line, col, context) => {
                     // Get the file name index if it exists, else add to the debug table
                     let file_idx = if let Some(&idx) = file_to_idx.get(file_path) {
                         idx
@@ -270,6 +270,7 @@ pub fn assemble(
                         column: u32::try_from_or_assemble_error(*col, |_| {
                             AssembleError::DebugSourceColumnLineTooLarge
                         })?,
+                        context: context.clone(),
                     });
                 }
                 Statement::Label(_, _) => {}

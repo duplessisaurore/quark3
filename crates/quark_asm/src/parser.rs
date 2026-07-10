@@ -7,6 +7,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
+use hashbrown::{HashMap, hash_map::Entry};
 use lepton3::Opcode;
 
 use quark_map::{long_from_opcode, opcode_from_long, opcode_from_short};
@@ -37,8 +38,8 @@ pub enum Statement {
     Label(String, usize),
 
     /// Attach extra source location information, specifically
-    /// a source file, line and column.
-    SourceLocation(String, usize, usize),
+    /// a source file, line, column and context.
+    SourceLocation(String, usize, usize, String),
 
     /// An instruction with its source line number
     Instruction(Instruction, usize),
@@ -150,6 +151,16 @@ pub enum ParseError {
 
     /// An argument was of the wrong type
     InvalidArgument { expected: &'static str, got: String },
+
+    /// A duplicate file was defined with an existing index
+    DuplicateFile {
+        index: u32,
+        original: String,
+        duplicate: String,
+    },
+
+    /// A file index was referenced but the file index was not defined
+    FileIndexNotDefined { index: u32 },
 }
 
 /// A `ParseError` wrapped with the line number it
@@ -183,6 +194,22 @@ impl Display for ParseError {
             Self::PushFnOutsideFunction => {
                 write!(f, "push.fn outside of function")
             }
+            Self::DuplicateFile {
+                index,
+                original,
+                duplicate,
+            } => {
+                write!(
+                    f,
+                    "duplicate file index `{index}` defined in file table, original file name `{original}`, duplicate file name `{duplicate}`"
+                )
+            }
+            Self::FileIndexNotDefined { index } => {
+                write!(
+                    f,
+                    "the file index `{index}` was referenced but it was not defined"
+                )
+            }
         }
     }
 }
@@ -198,11 +225,13 @@ impl Display for LinedParseError {
 /// # Errors
 ///
 /// Returns a `LinedParseError` if the source contains a syntax error.
+#[allow(clippy::too_many_lines)]
 pub fn parse(input: &str) -> Result<ParsedFile, LinedParseError> {
     let mut entry = None;
     let mut objects = Vec::new();
     let mut functions: Vec<Function> = Vec::new();
     let mut current_function: Option<Function> = None;
+    let mut files = HashMap::new();
 
     for (line_number, line) in input.lines().enumerate() {
         let line_number = line_number + 1;
@@ -222,6 +251,29 @@ pub fn parse(input: &str) -> Result<ParsedFile, LinedParseError> {
             // Defines the entry point of the image
             ["@entry", name] => {
                 entry = Some(name.to_string());
+            }
+
+            // @file <file_idx> <name>
+            // Defines a new file in the file table
+            ["@file", file_idx, name @ ..] => {
+                let file_index = parse_u32(line_number, file_idx)?;
+                let name = name.join(" ").trim_matches('"').to_string();
+
+                match files.entry(file_index) {
+                    Entry::Occupied(occupied_entry) => {
+                        // Duplicate file was defined already
+                        let existing_name: &String = occupied_entry.get();
+                        return Err(ParseError::DuplicateFile {
+                            index: file_index,
+                            original: existing_name.clone(),
+                            duplicate: name,
+                        }
+                        .with_line(line_number));
+                    }
+                    Entry::Vacant(vacant_entry) => {
+                        vacant_entry.insert_entry(name);
+                    }
+                }
             }
 
             // @object <name> <fields>
@@ -247,23 +299,32 @@ pub fn parse(input: &str) -> Result<ParsedFile, LinedParseError> {
                 });
             }
 
-            // @loc <file_path> <source_line> <source_col>
+            // @loc <file_indx> <source_line> <source_col> <context>
             // Attaches a source location at the current instruction offset
-            ["@loc", file, src_line, src_col] => {
+            ["@loc", file_indx, src_line, src_col, context @ ..] => {
                 let func = current_function
                     .as_mut()
                     .ok_or(ParseError::LocOutsideFunction.with_line(line_number))?;
 
                 let s_line = parse_u32(line_number, src_line)?;
                 let s_col = parse_u32(line_number, src_col)?;
+                let file_indx = parse_u32(line_number, file_indx)?;
 
-                // Clean off any accidental wrapping quotes
-                let clean_file = file.trim_matches('"').to_string();
+                // Grab the context recombined
+                let context = context.join(" ");
+
+                // Get the file from the file index
+                let Some(file_name) = files.get(&file_indx) else {
+                    return Err(
+                        ParseError::FileIndexNotDefined { index: file_indx }.with_line(line_number)
+                    );
+                };
 
                 func.body.push(Statement::SourceLocation(
-                    clean_file,
+                    file_name.clone(),
                     s_line as usize,
                     s_col as usize,
+                    context,
                 ));
             }
 
