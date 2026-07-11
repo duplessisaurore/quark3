@@ -372,6 +372,9 @@ impl<'source> BosonLowerer<'source> {
                     let _ = split_line.next();
                     let string = split_line
                         .next()
+                        .map(|str|
+                            str.trim()
+                        )
                         .expect("must exist due to pattern matching on string");
 
                     // The bytes of the string we write out
