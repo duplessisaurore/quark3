@@ -596,35 +596,22 @@ This is done through the `@string` directive.
 This expands to
 
 ```
-array.new
 push.uint 32
-array.cons
 push.uint 72
-array.cons
 push.uint 101
-array.cons
 push.uint 108
-array.cons
 push.uint 108
-array.cons
 push.uint 111
-array.cons
 push.uint 44
-array.cons
 push.uint 32
-array.cons
 push.uint 119
-array.cons
 push.uint 111
-array.cons
 push.uint 114
-array.cons
 push.uint 108
-array.cons
 push.uint 100
-array.cons
 push.uint 33
-array.cons
+push.uint 14
+array.new
 ```
 
 <a name="gluon3-linker"></a>
