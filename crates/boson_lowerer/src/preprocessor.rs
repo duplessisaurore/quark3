@@ -124,22 +124,11 @@ impl<'source> BosonLowerer<'source> {
                     self.capabilities.insert(name, num);
                 }
 
-                // @object <name> <fields> (field_name, ...)
-                other if other.iter().any(|tok| tok.starts_with("@object")) => {
-                    // The @object, <name>, <fields> part are required, with an optional field_names
-                    // which this desugarer handles, so less than 4 means no field names.
-                    if other.len() < 4 {
-                        self.out.push(other.join(" "));
-                        continue;
-                    };
-
-                    // Parse <name> <fields>
-                    let name = other[1];
-                    let field_count = parse_u64(line_number, other[2])?;
-
-                    // Remaining elements which are field names
-                    let fields = other[3..].join(" ");
-                    let field_names = fields
+                // @object <name> (field_name, ...)
+                ["@object", name, field_names @ ..] => {
+                    // Parse all of the field names
+                    let fields = field_names.join(" ");
+                    let mut field_names = fields
                         .strip_prefix("(")
                         .unwrap_or(&fields)
                         .strip_suffix(")")
@@ -147,15 +136,12 @@ impl<'source> BosonLowerer<'source> {
                         .split(",")
                         .collect::<Vec<_>>();
 
-                    // For a named object, we need to have all fields named.
-                    if (field_names.len() as u64) != field_count {
-                        return Err(LoweringErrorKind::InvalidNamedFieldsAmount {
-                            name: name.to_string(),
-                            fields_expected: field_count,
-                            fields_got: field_names.len() as u64,
-                        }
-                        .with_line(line_number));
+                    // Reset field names if we have no actual fields.
+                    if field_names.len() == 1 && field_names[0].is_empty() {
+                        field_names.clear();
                     }
+
+                    let field_count = field_names.len() as u64;
 
                     // Create field map for this object.
                     let mut field_map = HashMap::with_capacity(field_names.len());
@@ -195,18 +181,16 @@ impl<'source> BosonLowerer<'source> {
             let tokens: Vec<&str> = line.split_whitespace().collect();
 
             match tokens.as_slice() {
-                // @fn <name> <args> (arg_names, ...)
-                ["@fn", name, arg_count, args @ ..] => {
+                // @fn <name> (arg_names, ...)
+                ["@fn", name, args @ ..] => {
                     // Parse <args>
-                    let args_count = parse_u64(line_number, arg_count)?;
-
-                    // Remaining elements which are arg names
+                    // Remaining elements are arg names
                     let args = args.join(" ");
 
                     // Must start with "("
                     if !args.starts_with("(") {
                         return Err(LoweringErrorKind::InvalidArgument {
-                            expected: "@fn <name> <args> (<arg_name>, <arg_name>, ...)".to_string(),
+                            expected: "@fn <name> (<arg_name>, <arg_name>, ...)".to_string(),
                             got: tokens.join(" "),
                         }
                         .with_line(line_number));
@@ -221,19 +205,12 @@ impl<'source> BosonLowerer<'source> {
                         .collect::<Vec<_>>();
 
                     // Reset arg names if we have no actual arguments.
-                    if (args_count == 0) && arg_names.len() == 1 && arg_names[0].is_empty() {
+                    if arg_names.len() == 1 && arg_names[0].is_empty() {
                         arg_names.clear();
                     }
 
-                    // For a function we need to have all args named.
-                    if (arg_names.len() as u64) != args_count {
-                        return Err(LoweringErrorKind::InvalidNamedArgsFunctionAmount {
-                            name: name.to_string(),
-                            args_expected: args_count,
-                            args_got: arg_names.len() as u64,
-                        }
-                        .with_line(line_number));
-                    }
+                    // Args count is the number of arguments we have then.
+                    let args_count = arg_names.len() as u64;
 
                     // Create locals map for this function starting with args.
                     let mut locals_map = HashMap::with_capacity(arg_names.len());
@@ -253,7 +230,7 @@ impl<'source> BosonLowerer<'source> {
                 // These @fn directives do not obey the requirements so they're invalid
                 collected if collected[0].starts_with("@fn") => {
                     return Err(LoweringErrorKind::InvalidArgument {
-                        expected: "@fn <name> <args> (<arg_name>, <arg_name>, ...)".to_string(),
+                        expected: "@fn <name> (<arg_name>, <arg_name>, ...)".to_string(),
                         got: tokens.join(" "),
                     }
                     .with_line(line_number));

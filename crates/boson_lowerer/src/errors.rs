@@ -18,22 +18,6 @@ pub enum LoweringErrorKind {
         local_name: String,
     },
 
-    // Invalid number of fields named
-    // for this construct
-    InvalidNamedFieldsAmount {
-        name: String,
-        fields_expected: u64,
-        fields_got: u64,
-    },
-
-    // Invalid number of args named
-    // for this function
-    InvalidNamedArgsFunctionAmount {
-        name: String,
-        args_expected: u64,
-        args_got: u64,
-    },
-
     // An undefined global was used in a
     // global instruction
     UndefinedGlobal {
@@ -153,26 +137,6 @@ impl Display for LoweringErrorKind {
         match self {
             Self::InvalidArgument { expected, got } => {
                 write!(f, "expected `{expected}`, got `{got}`")
-            }
-            Self::InvalidNamedFieldsAmount {
-                name,
-                fields_expected,
-                fields_got,
-            } => {
-                write!(
-                    f,
-                    "The construct `{name}` expected `{fields_expected}` field names, got `{fields_got}` field names"
-                )
-            }
-            Self::InvalidNamedArgsFunctionAmount {
-                name,
-                args_expected,
-                args_got,
-            } => {
-                write!(
-                    f,
-                    "The function `{name}` expected `{args_expected}` arg names, got `{args_got}` arg names declared."
-                )
             }
             Self::UndefinedGlobal { global } => {
                 write!(f, "The global `{global}` was not defined")

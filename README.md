@@ -454,7 +454,7 @@ These are the things provided by `boson3` above `quark3`:
 @global counter
 
 // We can then refer to it in a special inline load.global
-@fn my_fn 0 ()
+@fn my_fn ()
     load.global counter
 
 // This desugars to
@@ -466,7 +466,8 @@ These are the things provided by `boson3` above `quark3`:
 
 ```
 // This names the arguments to the function as x and y
-@fn my_fn 2 (x, y)
+// and tells us there are 2 arguments to the function
+@fn my_fn (x, y)
     load.local x
     store.local y
 
@@ -479,7 +480,7 @@ These are the things provided by `boson3` above `quark3`:
     store.local
 
 // To define new non-argument locals, use the `@local` directive
-@fn main 0 ()
+@fn main ()
 
     @local result
     push.uint 1
@@ -500,7 +501,7 @@ These are the things provided by `boson3` above `quark3`:
 
 ```
 // You can name object fields now!
-@object Point 2 (x, y)
+@object Point (x, y)
 ```
 
 This can be used like:
