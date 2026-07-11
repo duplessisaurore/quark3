@@ -583,6 +583,50 @@ The exception is when `@local` is passed a parameter of the macro which preserve
 
 Macros can also call other macros, there is a recursive expansion limit in place adjustable as the arguments to the lowerer.
 
+## String literals
+
+`Boson3` provides a helper for pushing out a string literal as an array of `UTF-8` encoded `UInt` bytes.
+
+This is done through the `@string` directive.
+
+```
+@string Hello, World!
+```
+
+This expands to
+
+```
+array.new
+push.uint 32
+array.cons
+push.uint 72
+array.cons
+push.uint 101
+array.cons
+push.uint 108
+array.cons
+push.uint 108
+array.cons
+push.uint 111
+array.cons
+push.uint 44
+array.cons
+push.uint 32
+array.cons
+push.uint 119
+array.cons
+push.uint 111
+array.cons
+push.uint 114
+array.cons
+push.uint 108
+array.cons
+push.uint 100
+array.cons
+push.uint 33
+array.cons
+```
+
 <a name="gluon3-linker"></a>
 ## 🕸 Gluon3 Linker
 

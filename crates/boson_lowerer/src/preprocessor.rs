@@ -363,6 +363,30 @@ impl<'source> BosonLowerer<'source> {
                     self.out.push(op.to_string());
                 }
 
+                // @string <string_literal>
+                // pushes the string literal as a UTF-8 array of UInt bytes.
+                ["@string", _string @ ..] => {
+                    // Get the actual content part of the "string" with original
+                    // whitespace included
+                    let mut split_line = line.split("@string");
+                    let _ = split_line.next();
+                    let string = split_line
+                        .next()
+                        .expect("must exist due to pattern matching on string");
+
+                    // The bytes of the string we write out
+                    let string_bytes = string.as_bytes();
+
+                    for byte in string_bytes {
+                        // byte
+                        self.out.push(format!("push.uint {byte}"));
+                    }
+
+                    // length for array construction
+                    self.out.push(format!("push.uint {}", string_bytes.len()));
+                    self.out.push("array.new".to_string());
+                }
+
                 // Everything else in the file, these are just normal instructions.
                 other => self.out.push(other.join(" ")),
             }
