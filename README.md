@@ -17,7 +17,8 @@
 - [<code>🔬 Quark3 Language</code>](#quark3-language)
 - [<code>🌌 Assembly/Disassembly</code>](#quark3-asm-disasm)
 - [<code>🔧 Boson3 Preprocessor</code>](#boson3-preprocessor)
-- [<code>🔧 Gluon3 Linker</code>](#gluon3-linker)
+- [<code>🕸 Gluon3 Linker</code>](#gluon3-linker)
+- [<code>🌀 Collider</code>](#collider)
 - [<code>🧾 License</code>](#license)
 - [<code>🎓 Acknowledgments</code>](#acknowledgements)
 
@@ -666,6 +667,24 @@ For example:
 ```
 
 This will output `2`.
+
+<a name="collider"></a>
+## 🌀 Collider
+
+`Collider3` is a very *keep it simple stupid* build system for a `Boson3`/`Quark3`/`Gluon3` project (specifically `Gluon3` -> `Boson3` -> `Quark3`).
+
+It runs the full build chain (installed on the system as `gluon3`, `boson3`, and `quark3` respectively) for a set of source files in one go based off a manifest file named `build.toml`.
+
+An example of this `build.toml` is:
+
+```toml
+# build.toml
+name = "uart"
+files = [
+    "src/**/*.b3",
+    "vendor/ringbuf.b3",
+]
+```
 
 <a name="license"></a>
 ## 🧾 License

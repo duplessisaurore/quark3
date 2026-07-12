@@ -1,0 +1,23 @@
+[package]
+name = "collider"
+version = "3.2.0"
+edition = "2024"
+authors = ["The Quark3 Contributors"]
+
+description = "A KISS TOML based build system for a Gluon3 project"
+readme = "README.md"
+
+repository = "https://github.com/duplessisaurore/quark3"
+license = "AGPLv3"
+
+keywords = ["languages", "scripting", "script"]
+
+[dependencies]
+
+# Argument parsing helper
+clap = { version = "4.5", features = ["derive", "wrap_help"] }
+
+# parsing helpers & globbing
+glob = "0.3"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
