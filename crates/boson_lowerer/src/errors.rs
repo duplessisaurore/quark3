@@ -75,8 +75,8 @@ pub enum LoweringErrorKind {
         name: String,
     },
 
-    /// We hit the expansion limit and are no longer continuing
-    ExpansionLimit {
+    /// We hit the total expansion limit and are no longer continuing
+    ExpansionTotalLimit {
         // This is the macro which we hit the limit in
         name: String,
     },
@@ -110,6 +110,39 @@ pub enum LoweringErrorKind {
     /// File index was not found in the file table
     FileIndexNotDefined {
         index: u64,
+    },
+
+    /// The `passes` limit was hit, meaning we
+    /// expanded too much
+    PassLimit {
+        passes: u64,
+    },
+
+    /// This macro parameter was found to be unnamed
+    UndefinedMacroParameter {
+        name: String,
+        param: String,
+    },
+
+    /// We are trying to use a raw directive in a non-block argument
+    /// which is not allowed!
+    RawDirectiveAsArgument {
+        name: String,
+    },
+
+    /// The scope is unbalanced and did not close
+    UnbalancedScope,
+
+    /// The scope directive was found outside of a scope
+    /// such as break/continue
+    ScopeDirectiveOutsideScope {
+        directive: String,
+    },
+
+    /// The target of the this scope directive was found
+    /// to be unavailable/could not be retrieved
+    ScopeTargetUnavailable {
+        directive: String,
     },
 }
 
@@ -204,10 +237,10 @@ impl Display for LoweringErrorKind {
             Self::UndefinedMacro { name } => {
                 write!(f, "The macro `{name}` was not defined")
             }
-            Self::ExpansionLimit { name } => {
+            Self::ExpansionTotalLimit { name } => {
                 write!(
                     f,
-                    "While expanding the macro `{name}`, the macro expansion limit was hit!"
+                    "While expanding the macro `{name}`, the total macro expansion limit was hit!"
                 )
             }
             Self::MacroInvocationLeftoverTokens { name } => {
@@ -230,6 +263,42 @@ impl Display for LoweringErrorKind {
                 write!(
                     f,
                     "the file index `{index}` was referenced but it was not defined"
+                )
+            }
+            Self::PassLimit { passes } => {
+                write!(
+                    f,
+                    "The macro expansion pass limit of `{passes}` was hit! This usually means a macro invokes itself, directly or indirectly, without terminating."
+                )
+            }
+            Self::UndefinedMacroParameter { name, param } => {
+                write!(
+                    f,
+                    "The macro `{name}` refers to the parameter `{param}`, but no such parameter is declared in its signature!"
+                )
+            }
+            Self::RawDirectiveAsArgument { name } => {
+                write!(
+                    f,
+                    "The invocation of the macro `{name}` passes a raw directive as an argument, these are only permitted inside a `{{..}}` block!"
+                )
+            }
+            Self::UnbalancedScope => {
+                write!(
+                    f,
+                    "Found an unbalanced scope! An `@scope_push` is missing its corresponding `@scope_pop`, or a `@scope_pop` appeared with nothing to close."
+                )
+            }
+            Self::ScopeDirectiveOutsideScope { directive } => {
+                write!(
+                    f,
+                    "The directive `{directive}` was used outside of any enclosing scope!"
+                )
+            }
+            Self::ScopeTargetUnavailable { directive } => {
+                write!(
+                    f,
+                    "The directive `{directive}` was used in a scope that does not provide a target for it!"
                 )
             }
         }

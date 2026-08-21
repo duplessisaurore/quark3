@@ -35,9 +35,13 @@ struct Cli {
     /// Output Quark3 source file
     output: PathBuf,
 
-    // Optional recursive macro expansion limit
+    // Optional recursive total macro expansion limit
     #[arg(long, short, default_value_t = 10000)]
     macro_expansion_limit: u64,
+
+    // Optional recursive macro passes limit
+    #[arg(long, short, default_value_t = 64)]
+    macro_passes_limit: u64,
 
     // Optional file to write the expanded macro output to before lowering
     #[arg(long, short)]
@@ -50,6 +54,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input_path = &cli.input;
     let output_path = &cli.output;
     let macro_expansion_limit = cli.macro_expansion_limit;
+    let macro_passes_limit = cli.macro_passes_limit;
 
     // Read source file
     let source = fs::read_to_string(input_path).unwrap_or_else(|e| {
@@ -58,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     // Expand macros in input source
-    let expander = MacroExpander::new(&source, macro_expansion_limit);
+    let expander = MacroExpander::new(&source, macro_passes_limit, macro_expansion_limit);
     let expanded = expander.expand().unwrap_or_else(|e| {
         eprintln!("macro expansion error: {e}");
         process::exit(1);

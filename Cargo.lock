@@ -60,9 +60,9 @@ dependencies = [
 
 [[package]]
 name = "bitflags"
-version = "2.13.0"
+version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
+checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
 name = "boson_lowerer"
@@ -74,9 +74,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.1"
+version = "4.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ddb117e43bbf7dacf0a4190fef4d345b9bad68dfc649cb349e7d17d28428e51"
+checksum = "dd059f9da4f5c36b3787f65d38ccaab1cc315f07b01f89abc8359ee6a8205011"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -84,9 +84,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.0"
+version = "4.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "714a53001bf66416adb0e2ef5ac857140e7dc3a0c48fb28b2f10762fc4b5069f"
+checksum = "f09628afdcc538b57f3c6341e9c8e9970f18e4a481690a64974d7023bd33548b"
 dependencies = [
  "anstream",
  "anstyle",
@@ -199,8 +199,8 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "lepton3"
-version = "4.0.0"
-source = "git+https://github.com/duplessisaurore/lepton3#196f823e9962299faecc0c46d93055eaa397dbdc"
+version = "5.0.0"
+source = "git+https://github.com/duplessisaurore/lepton3#61e3c6715f90f793c456fdcc670b6ab0d5461814"
 dependencies = [
  "lepton_image",
  "lepton_opcodes",
@@ -209,21 +209,21 @@ dependencies = [
 
 [[package]]
 name = "lepton_image"
-version = "2.0.0"
-source = "git+https://github.com/duplessisaurore/lepton3#196f823e9962299faecc0c46d93055eaa397dbdc"
+version = "2.2.0"
+source = "git+https://github.com/duplessisaurore/lepton3#61e3c6715f90f793c456fdcc670b6ab0d5461814"
 dependencies = [
  "lepton_opcodes",
 ]
 
 [[package]]
 name = "lepton_opcodes"
-version = "2.2.0"
-source = "git+https://github.com/duplessisaurore/lepton3#196f823e9962299faecc0c46d93055eaa397dbdc"
+version = "3.0.0"
+source = "git+https://github.com/duplessisaurore/lepton3#61e3c6715f90f793c456fdcc670b6ab0d5461814"
 
 [[package]]
 name = "lepton_vm"
-version = "3.3.0"
-source = "git+https://github.com/duplessisaurore/lepton3#196f823e9962299faecc0c46d93055eaa397dbdc"
+version = "5.0.0"
+source = "git+https://github.com/duplessisaurore/lepton3#61e3c6715f90f793c456fdcc670b6ab0d5461814"
 dependencies = [
  "lepton_image",
  "lepton_opcodes",
@@ -391,9 +391,9 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "syn"
-version = "2.0.118"
+version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
+checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -412,9 +412,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.2+spec-1.1.0"
+version = "1.1.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81f3d15e84cbcd896376e6730314d59fb5a87f31e4b038454184435cd57defee"
+checksum = "53c96ecdfa941c8fc4fcaed14f99ada8ebed502eef533015095a07e3301d4c3c"
 dependencies = [
  "indexmap",
  "serde_core",
@@ -445,9 +445,9 @@ dependencies = [
 
 [[package]]
 name = "toml_writer"
-version = "1.1.1+spec-1.1.0"
+version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
+checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "unicode-ident"
@@ -478,6 +478,6 @@ dependencies = [
 
 [[package]]
 name = "winnow"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
+checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
