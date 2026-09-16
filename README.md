@@ -554,11 +554,13 @@ A macro is defined between `@macro` and `@end`, taking a list of named parameter
 ```
 // This replicates a "let" statement as seen in other languages.
 @macro let (name, init)
-    @local name
-    init
-    store.local name
+    @local $name
+    $init
+    store.local $name
 @end
 ```
+
+These parameters can be referred in the macro using the `$` sigil as a prefix.
 
 Each macro can be invoked by name with the `!` prefix, giving one argument per parameter similar to instructions.
 
@@ -578,11 +580,109 @@ push.int 0
 store.local total
 ```
 
-Macros automatically have hygiene for `@local <name>` and `label:`. Each `@local <name>` and `label:` defined automatically has a unique id appended to the name or label for hygiene.
+Token-style arguments can be substituted inline which would appear something like:
 
-The exception is when `@local` is passed a parameter of the macro which preserves the name, such as in `let` above.
+```
+@macro load (name)
+    load.local $name
+@end
 
-Macros can also call other macros, there is a recursive expansion limit in place adjustable as the arguments to the lowerer.
+!load result
+```
+
+This produces:
+
+```
+load.local result
+```
+
+Macros can invoke other macros:
+
+```
+@macro increment (value)
+    load.local $value
+    push.int 1
+    numeric.add
+    store.local $value
+@end
+
+@macro increment_twice (value)
+    !increment $value
+    !increment $value
+@end
+```
+
+Macros support hygienic names for identifiers introduced by the macro itself:
+
+A name beginning with `%` is treated as a name introduced by the macro and receives a unique macro-specific suffix:
+
+```
+@macro loop ()
+    %start:
+        push.int 1
+        jump %start
+@end
+
+@macro temporary_something () 
+    @local %tmp 
+    // ... 
+@end
+```
+
+This hygiene mechanism is particularly useful for macros that introduce labels.
+
+### Scope Control
+
+Boson3 provides `@scope_push` and `@scope_pop` for defining scopes used by special `@break` and `@continue` directives.
+
+```
+@scope_push cnt brk
+
+    // `@continue` and `@break` are valid here
+
+    @continue
+
+    @break
+
+@scope_pop
+```
+
+The directive parameters are optional and control which operations the scope supports:
+
+```text
+@scope_push brk
+    // @break is valid
+@scope_pop
+
+@scope_push cnt
+    // @continue is valid
+@scope_pop
+```
+
+A scope with neither flag does not provide a target for either operation:
+
+```text
+@scope_push
+    // neither @break nor @continue can target this scope
+@scope_pop
+```
+
+`@break` targets the nearest enclosing scope that was declared with `brk`, while `@continue` targets the nearest enclosing scope that was declared with `cnt`.
+
+This means nested scopes can selectively handle control flow:
+
+```text
+@scope_push cnt brk
+
+    @scope_push cnt
+
+        @continue   // targets the inner scope
+        // @break would skip this scope and target the outer `brk` scope
+
+    @scope_pop
+
+@scope_pop
+```
 
 ## String literals
 

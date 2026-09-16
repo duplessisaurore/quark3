@@ -971,7 +971,7 @@ fn expand_macro(
     Ok(out)
 }
 
-/// Substitute `$param` inside a raw directive line by plain text replacement.
+/// Substitute `$param` inside a raw line of a directive
 fn substitute_raw(text: &str, macro_def: &Macro, args: &[MacroArg]) -> String {
     let mut order = (0..macro_def.params.len()).collect::<Vec<_>>();
 
@@ -1001,9 +1001,9 @@ struct Scope {
 /// Placeholder for a scope having no target of this kind
 const NO_TARGET: &str = "-";
 
-/// Resolve `@break` / `@continue` against `@scope_push` / `@scope_pop` markers
+/// Resolve `@break` / `@continue` against `@scope_push` / `@scope_pop`s
 ///
-/// This is essentially a special resolving that matches these markers together
+/// This is essentially a special resolving that matches these scope markers together
 /// and the special @break/@continue directives
 fn resolve_scopes(lines: Vec<Line>) -> Result<Vec<Line>, LoweringError> {
     let mut stack = Vec::new();
