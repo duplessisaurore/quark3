@@ -15,13 +15,13 @@
 use std::error::Error;
 
 pub mod errors;
-pub mod macroprocessor;
+pub mod macro_scope_processor;
 pub mod preprocessor;
 
 use clap::Parser;
 use std::{fs, path::PathBuf, process};
 
-use crate::{macroprocessor::MacroExpander, preprocessor::BosonLowerer};
+use crate::{macro_scope_processor::MacroScopeExpander, preprocessor::BosonLowerer};
 
 #[derive(Parser)]
 #[command(
@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     // Expand macros in input source
-    let expander = MacroExpander::new(&source, macro_passes_limit, macro_expansion_limit);
+    let expander = MacroScopeExpander::new(&source, macro_passes_limit, macro_expansion_limit);
     let expanded = expander.expand().unwrap_or_else(|e| {
         eprintln!("macro expansion error: {e}");
         process::exit(1);

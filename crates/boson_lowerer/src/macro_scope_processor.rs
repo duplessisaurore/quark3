@@ -1,12 +1,13 @@
-//! The actual macro processor itself,
-//! this runs all the macro functions in `Boson3`
+//! The actual macro & scope processor itself,
+//! this runs all the macro & scope functions in `Boson3`
 
 use std::{collections::HashMap, fmt, vec::IntoIter};
 
 use crate::errors::{LoweringError, LoweringErrorKind};
 
 /// These a special directives which should be 'ignored'
-/// by the macro preprocessor and must survive it without being modified
+/// by this preprocessor and must survive it without being modified,
+/// as else bad things will occur
 const SAFE_DIRECTIVES: &[&str] = &["@string"];
 
 /// This marks a parameter in a macro body
@@ -36,7 +37,7 @@ pub struct Origin {
 }
 
 impl Origin {
-    /// Derive the origin for lines produced by expanding `macro_name`
+    /// Derive a new origin for lines produced by expanding `macro_name`
     /// at this location.
     ///
     /// This essentially just creates a new `Origin` with this `macro_name`
@@ -134,12 +135,14 @@ enum MacroArg {
     Block(Vec<Line>),
 }
 
-/// The macro expander itself
+/// The macro & scope expander itself
 ///
 /// This takes some source input and outputs a macro-expanded
 /// version of the source with all `@macro` directives removed.
+///
+/// (also all the @scope/@break/@continue directives)
 #[derive(Debug)]
-pub struct MacroExpander<'source> {
+pub struct MacroScopeExpander<'source> {
     /// All collected macro definitions by name.
     macros: HashMap<String, Macro>,
 
@@ -169,7 +172,7 @@ pub struct MacroExpander<'source> {
     max_passes: u64,
 }
 
-impl<'source> MacroExpander<'source> {
+impl<'source> MacroScopeExpander<'source> {
     /// Creates a new `Boson3` macro expander, this is responsible
     /// for expanding the `Boson3` macros out
     ///
@@ -388,15 +391,16 @@ impl<'source> MacroExpander<'source> {
                 continue;
             };
 
-            // Grab the name of the macro we are
             let Some(name) = invocation.strip_prefix('!') else {
                 current_expansion_out.push(line);
                 continue;
             };
 
+            // We know a macro invocation must exist because it matches the syntax
             found_macro_invocation = true;
 
-            // This macro wasn't found
+            // This macro wasn't found in the defined macros at time of expansion
+            // so it must not be defined.
             if !self.macros.contains_key(name) {
                 return Err(LoweringErrorKind::UndefinedMacro {
                     name: name.to_string(),
@@ -429,7 +433,7 @@ impl<'source> MacroExpander<'source> {
             let mut cursor = ArgCursor::new(&mut lines, line.origin.clone(), rest);
             let args = cursor.parse_args(macro_def.params.len(), name)?;
 
-            // Expand the actual macro here
+            // Expand the actual macro
             let expanded = expand_macro(macro_def, &args, id, name, &line.origin, emit_loc)?;
 
             current_expansion_out.extend(expanded);
@@ -525,7 +529,8 @@ fn parse_u64(line: usize, token: &str) -> Result<u64, LoweringError> {
 
 /// Parse `(<param>, <param>, ...)` off a @macro signature.
 ///
-/// Both `(x, y)` and `($x, $y)` are accepted and normalise to bare names.
+/// Both `(x, y)` and `($x, $y)` are accepted and normalise to bare names
+/// bcz the old syntax is (x, y) but it may make sense too for a user to use $
 fn parse_params(
     line_number: usize,
     tokens: &[&str],
@@ -615,8 +620,10 @@ fn collect_body(
     Ok(body)
 }
 
-/// Catch `$typo` at definition time rather than emitting a bare `$typo`
-/// token into the Quark3 stream.
+/// Validate all the used macro parameters in its body actually
+/// are a parameter to the macro
+///
+/// E.g $typo is actually a valid parameter to the @macro
 fn validate_body(
     body: &[BodyLine],
     params: &[String],
@@ -624,7 +631,8 @@ fn validate_body(
     line_number: usize,
 ) -> Result<(), LoweringError> {
     for body_line in body {
-        // We shouldn't tokenise this one, since its raw and pass through
+        // We shouldn't tokenise this one, since its raw and pass through regardless
+        // else we may accidentally over-zealously match
         if body_line.raw {
             continue;
         }
@@ -992,6 +1000,10 @@ fn substitute_raw(text: &str, macro_def: &Macro, args: &[MacroArg]) -> String {
 
 /// A scope is a special label pair formed from a "break"/"continue"
 /// label somewhere in source code that is inserted.
+///
+/// Essentially just a driver for loops lol but i mean you can technically
+/// use it for other things, its just two labels that can be jumped to specially
+/// through the @break and @continue directives.
 #[derive(Debug)]
 struct Scope {
     brk: Option<String>,
@@ -999,6 +1011,9 @@ struct Scope {
 }
 
 /// Placeholder for a scope having no target of this kind
+///
+/// Use this in the scope push directive for declaring there is no
+/// label of this kind
 const NO_TARGET: &str = "-";
 
 /// Resolve `@break` / `@continue` against `@scope_push` / `@scope_pop`s
@@ -1015,6 +1030,7 @@ fn resolve_scopes(lines: Vec<Line>) -> Result<Vec<Line>, LoweringError> {
             continue;
         }
 
+        // get rid of whitespace and turn into tokens
         let tokens = tokenize(&line.text);
         let borrowed = tokens.iter().map(String::as_str).collect::<Vec<_>>();
 

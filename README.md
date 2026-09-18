@@ -636,7 +636,7 @@ This hygiene mechanism is particularly useful for macros that introduce labels.
 Boson3 provides `@scope_push` and `@scope_pop` for defining scopes used by special `@break` and `@continue` directives.
 
 ```
-@scope_push cnt brk
+@scope_push break_label continue_label
 
     // `@continue` and `@break` are valid here
 
@@ -647,14 +647,14 @@ Boson3 provides `@scope_push` and `@scope_pop` for defining scopes used by speci
 @scope_pop
 ```
 
-The directive parameters are optional and control which operations the scope supports:
+The directive parameters are optional and control which operations the scope supports, use `-` to indicate there is no target for a certain scope `brk`/`cnt`.
 
 ```text
-@scope_push brk
+@scope_push brk -
     // @break is valid
 @scope_pop
 
-@scope_push cnt
+@scope_push - cnt
     // @continue is valid
 @scope_pop
 ```
@@ -662,7 +662,7 @@ The directive parameters are optional and control which operations the scope sup
 A scope with neither flag does not provide a target for either operation:
 
 ```text
-@scope_push
+@scope_push - -
     // neither @break nor @continue can target this scope
 @scope_pop
 ```
@@ -672,14 +672,16 @@ A scope with neither flag does not provide a target for either operation:
 This means nested scopes can selectively handle control flow:
 
 ```text
-@scope_push cnt brk
+@scope_push brk cnt
 
-    @scope_push cnt
+    @scope_push - cnt
 
-        @continue   // targets the inner scope
-        // @break would skip this scope and target the outer `brk` scope
+        @continue   // inner cnt
+        @break      // outer brk
 
     @scope_pop
+
+        @continue // seperate cnt to inner one
 
 @scope_pop
 ```
