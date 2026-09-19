@@ -66,7 +66,7 @@ checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
 name = "boson_lowerer"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "clap",
  "quark_map",
@@ -159,7 +159,7 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "gluon_linker"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "clap",
 ]

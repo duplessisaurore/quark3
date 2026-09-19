@@ -422,8 +422,8 @@ impl<'source> MacroScopeExpander<'source> {
 
             let id = self.next_id;
 
-            // Whether or not we should emit a macro for this (essentially if theres a actual file)
-            let emit_loc = self.filenames.contains_key(&line.origin.file);
+            // Get the file name if it exists.
+            let file_name = self.filenames.get(&line.origin.file).map(String::as_str);
 
             let macro_def = &self.macros[name];
 
@@ -434,7 +434,7 @@ impl<'source> MacroScopeExpander<'source> {
             let args = cursor.parse_args(macro_def.params.len(), name)?;
 
             // Expand the actual macro
-            let expanded = expand_macro(macro_def, &args, id, name, &line.origin, emit_loc)?;
+            let expanded = expand_macro(macro_def, &args, id, name, &line.origin, file_name)?;
 
             current_expansion_out.extend(expanded);
         }
@@ -880,16 +880,32 @@ fn expand_macro(
     id: u64,
     macro_name: &str,
     origin: &Origin,
-    emit_loc: bool,
+    file_name: Option<&str>,
 ) -> Result<Vec<Line>, LoweringError> {
     let child = origin.through(macro_name);
     let mut out = Vec::new();
 
+    // Context for the macro expansion LOC's
+    let mut context = match file_name {
+        Some(file_name) => format!(
+            "macro {macro_name} invoked in {file_name} at line {}",
+            origin.line
+        ),
+        None => format!("macro {macro_name} invoked at line {}", origin.line),
+    };
+
+    if child.chain.len() > 1 {
+        context.push_str(&format!(" (expanded via {})", child.chain.join(" -> ")));
+    }
+
     // Point debug info at the invocation site
     // so the user can know
-    if emit_loc {
+    if file_name.is_some() {
         out.push(Line::cooked(
-            format!("@loc {} {} {}", origin.file, origin.line, origin.col),
+            format!(
+                "@loc {} {} {} {context}",
+                origin.file, origin.line, origin.col
+            ),
             child.clone(),
         ));
     }
@@ -907,6 +923,15 @@ fn expand_macro(
         let tokens = tokenize(&body_line.text);
 
         if tokens.is_empty() {
+            continue;
+        }
+
+        // Preserve macro expansion context on LOC lines throughout expansion
+        if tokens.first().map(String::as_str) == Some("@loc") {
+            out.push(Line::cooked(
+                format!("{} {context}", tokens.join(" ")),
+                child.clone(),
+            ));
             continue;
         }
 

@@ -484,11 +484,7 @@ impl Linker {
                     };
 
                     // Rebuild new macro invocation with all the arguments
-                    let mut rebuilt = vec![format!(
-                        "!{new_macro_name} {} {}",
-                        get_file_idx(loc_maps, &file.full_file_name),
-                        line_number
-                    )];
+                    let mut rebuilt = vec![format!("!{new_macro_name}")];
                     rebuilt.extend(args.iter().map(|token| token.to_string()));
 
                     push_out(
