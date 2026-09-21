@@ -257,8 +257,9 @@ impl Linker {
                         .join(" ")
                         .replace(['(', ')', ','], " ")
                         .split_whitespace()
-                        .map(|name| name.to_string())
+                        .map(|name| format!("${name}"))
                         .collect();
+                    
                     macro_params = Some(param_names);
                     output.push(tokens.join(" "));
                 }

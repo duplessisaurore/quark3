@@ -735,7 +735,7 @@ A file can also prevent linking succeeding without a namespace being defined usi
 ```
 
 Linking essentially shoves all the files into one file, with the namespace prefixing all of it's capabilities,
-globals, functions and objects. All instructions will then automatically be remapped in the file to refer to it's namespaced items.
+globals, functions, macros and objects. All instructions will then automatically be remapped in the file to refer to it's namespaced items.
 
 For example:
 
