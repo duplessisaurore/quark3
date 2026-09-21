@@ -248,6 +248,7 @@ impl Linker {
             }
 
             let tokens: Vec<&str> = line.split_whitespace().collect();
+            
 
             match tokens.as_slice() {
                 // @macro <name> (<param>, ...) opens a macro body,
@@ -259,7 +260,7 @@ impl Linker {
                         .split_whitespace()
                         .map(|name| format!("${name}"))
                         .collect();
-                    
+
                     macro_params = Some(param_names);
                     output.push(tokens.join(" "));
                 }

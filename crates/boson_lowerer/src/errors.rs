@@ -3,6 +3,8 @@
 
 use std::fmt::Display;
 
+use crate::macro_scope_processor::Origin;
+
 /// All possible error kinds that can occurr
 /// during the lowering process
 pub enum LoweringErrorKind {
@@ -150,8 +152,14 @@ pub enum LoweringErrorKind {
 pub struct LoweringError {
     kind: LoweringErrorKind,
 
-    // Line in the input source file.
-    line: usize,
+    // Location in the input source file.
+    location: LocatedKind,
+}
+
+/// The type of location a `LoweringError` has.
+pub enum LocatedKind {
+    LineNumber(usize),
+    Origin(Origin),
 }
 
 impl LoweringErrorKind {
@@ -159,7 +167,16 @@ impl LoweringErrorKind {
     /// `LoweringError`.
     pub fn with_line(self, line_number: usize) -> LoweringError {
         LoweringError {
-            line: line_number,
+            location: LocatedKind::LineNumber(line_number),
+            kind: self,
+        }
+    }
+
+    /// Adds a origin to this `LoweringErrorKind` turning it into
+    /// a `LoweringError`.
+    pub fn with_origin(self, line_origin: Origin) -> LoweringError {
+        LoweringError {
+            location: LocatedKind::Origin(line_origin),
             kind: self,
         }
     }
@@ -307,6 +324,13 @@ impl Display for LoweringErrorKind {
 
 impl Display for LoweringError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "line `{}`: {}", self.line, self.kind)
+        match &self.location {
+            LocatedKind::LineNumber(line) => write!(f, "line `{}`: {}", line, self.kind),
+            LocatedKind::Origin(origin) => write!(
+                f,
+                "line `{}` in file with id `{}` with expansion chain {:?}: {}",
+                origin.line, origin.file, origin.chain, self.kind
+            ),
+        }
     }
 }

@@ -405,7 +405,7 @@ impl<'source> MacroScopeExpander<'source> {
                 return Err(LoweringErrorKind::UndefinedMacro {
                     name: name.to_string(),
                 }
-                .with_line(line.origin.line_usize()));
+                .with_origin(line.origin));
             }
 
             self.next_id += 1;
@@ -417,7 +417,7 @@ impl<'source> MacroScopeExpander<'source> {
                 return Err(LoweringErrorKind::ExpansionTotalLimit {
                     name: name.to_string(),
                 }
-                .with_line(line.origin.line_usize()));
+                .with_origin(line.origin));
             }
 
             let id = self.next_id;
@@ -1074,7 +1074,7 @@ fn resolve_scopes(lines: Vec<Line>) -> Result<Vec<Line>, LoweringError> {
             ["@scope_pop"] => {
                 if stack.pop().is_none() {
                     return Err(
-                        LoweringErrorKind::UnbalancedScope.with_line(line.origin.line_usize())
+                        LoweringErrorKind::UnbalancedScope.with_origin(line.origin)
                     );
                 }
             }
@@ -1093,7 +1093,7 @@ fn resolve_scopes(lines: Vec<Line>) -> Result<Vec<Line>, LoweringError> {
                             expected: format!("{directive} [<depth>]"),
                             got: borrowed.join(" "),
                         }
-                        .with_line(line.origin.line_usize()));
+                        .with_origin(line.origin));
                     }
                 };
 
@@ -1102,7 +1102,7 @@ fn resolve_scopes(lines: Vec<Line>) -> Result<Vec<Line>, LoweringError> {
                     return Err(LoweringErrorKind::ScopeDirectiveOutsideScope {
                         directive: directive.to_string(),
                     }
-                    .with_line(line.origin.line_usize()));
+                    .with_origin(line.origin));
                 };
 
                 let scope = &stack[index];
@@ -1118,7 +1118,7 @@ fn resolve_scopes(lines: Vec<Line>) -> Result<Vec<Line>, LoweringError> {
                     return Err(LoweringErrorKind::ScopeTargetUnavailable {
                         directive: directive.to_string(),
                     }
-                    .with_line(line.origin.line_usize()));
+                    .with_origin(line.origin));
                 };
 
                 // This is essentially equal to us just jumping to that specific brk/cnt target.
