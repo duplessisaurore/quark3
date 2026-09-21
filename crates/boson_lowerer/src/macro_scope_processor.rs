@@ -1073,47 +1073,59 @@ fn resolve_scopes(lines: Vec<Line>) -> Result<Vec<Line>, LoweringError> {
             // Pops the previous scope (or error if there were none found)
             ["@scope_pop"] => {
                 if stack.pop().is_none() {
-                    return Err(
-                        LoweringErrorKind::UnbalancedScope.with_origin(line.origin)
-                    );
+                    return Err(LoweringErrorKind::UnbalancedScope.with_origin(line.origin));
                 }
             }
 
             // Handle the @break/@continue directives
             [directive @ ("@break" | "@continue"), rest @ ..] => {
-                let depth = match rest {
-                    // Break out of the previous scope
-                    [] => 0usize,
-
-                    // Else continue/break out a certain "depth" of scope
-                    // in the current position
-                    [count] => parse_u64(line.origin.line_usize(), count)? as usize,
-                    _ => {
-                        return Err(LoweringErrorKind::InvalidArgument {
-                            expected: format!("{directive} [<depth>]"),
-                            got: borrowed.join(" "),
+                let target = if rest.is_empty() {
+                    // If there is no explicit depth then try
+                    // find the first matching scope outwards
+                    if stack.is_empty() {
+                        return Err(LoweringErrorKind::ScopeDirectiveOutsideScope {
+                            directive: directive.to_string(),
                         }
                         .with_origin(line.origin));
                     }
-                };
 
-                // Get the specific scope we are handling with this directive
-                let Some(index) = stack.len().checked_sub(depth + 1) else {
-                    return Err(LoweringErrorKind::ScopeDirectiveOutsideScope {
-                        directive: directive.to_string(),
-                    }
-                    .with_origin(line.origin));
-                };
-
-                let scope = &stack[index];
-
-                // Whether we are targetting the "brk" or "cnt" here.
-                let target = if *directive == "@break" {
-                    scope.brk.as_ref()
+                    // Whether we are targetting the "brk" or "cnt" here.
+                    // find the first provided one out
+                    stack.iter().rev().find_map(|scope| {
+                        if *directive == "@break" {
+                            scope.brk.as_ref()
+                        } else {
+                            scope.cont.as_ref()
+                        }
+                    })
                 } else {
-                    scope.cont.as_ref()
+                    // We have an explicit depth (hopefully) passed in, which we are breaking out of.
+                    let depth = match rest {
+                        [count] => parse_u64(line.origin.line_usize(), count)? as usize,
+                        _ => {
+                            return Err(LoweringErrorKind::InvalidArgument {
+                                expected: format!("{directive} [<depth>]"),
+                                got: borrowed.join(" "),
+                            }
+                            .with_origin(line.origin));
+                        }
+                    };
+
+                    let scope = stack.iter().rev().nth(depth).ok_or_else(|| {
+                        LoweringErrorKind::ScopeDirectiveOutsideScope {
+                            directive: directive.to_string(),
+                        }
+                        .with_origin(line.origin.clone())
+                    })?;
+
+                    if *directive == "@break" {
+                        scope.brk.as_ref()
+                    } else {
+                        scope.cont.as_ref()
+                    }
                 };
 
+                // Cant find a target in the end!
                 let Some(target) = target else {
                     return Err(LoweringErrorKind::ScopeTargetUnavailable {
                         directive: directive.to_string(),
