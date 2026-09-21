@@ -3,6 +3,8 @@
 
 use std::{collections::HashMap, fmt, vec::IntoIter};
 
+use regex::Regex;
+
 use crate::errors::{LoweringError, LoweringErrorKind};
 
 /// These a special directives which should be 'ignored'
@@ -112,6 +114,15 @@ struct BodyLine {
     raw: bool,
 }
 
+/// One line of a match in a macro
+/// These define requirements at compile time for macro matches
+/// of the param values
+#[derive(Debug)]
+struct MatchReq {
+    param: String,
+    match_req: Regex,
+}
+
 /// A @macro definition, this is essentially
 /// some textual replacement form with some extra
 /// logic for hygiene
@@ -123,6 +134,9 @@ struct Macro {
 
     /// The body lines of the macro
     body: Vec<BodyLine>,
+
+    /// Match lines of the macro for ensuring params meet some regex
+    match_req: Vec<MatchReq>,
 }
 
 /// An argument provided during the invocation of a macro
@@ -251,7 +265,7 @@ impl<'source> MacroScopeExpander<'source> {
                 continue;
             }
 
-            let tokens_string = tokenize(line);
+            let tokens_string = tokenise(line);
             let tokens = tokens_string.iter().map(String::as_str).collect::<Vec<_>>();
 
             match tokens.as_slice() {
@@ -294,12 +308,26 @@ impl<'source> MacroScopeExpander<'source> {
                 // @macro <name> (<param>, <param>, ...)
                 ["@macro", name, params @ ..] => {
                     let params = parse_params(line_number, &tokens, params)?;
-                    let body = collect_body(&mut lines, line_number, name)?;
+                    let (body, matches) = collect_body(&mut lines, line_number, name)?;
 
                     // Validate the macro body is valid.
                     validate_body(&body, &params, name, line_number)?;
 
-                    let macro_def = Macro { params, body };
+                    // All matches must be valid params
+                    for match_req in &matches {
+                        if !params.contains(&match_req.param) {
+                            return Err(LoweringErrorKind::MatchPatternInvalidParam {
+                                param_name: match_req.param.clone(),
+                            }
+                            .with_line(line_number));
+                        }
+                    }
+
+                    let macro_def = Macro {
+                        params,
+                        body,
+                        match_req: matches,
+                    };
 
                     // Prevent duplicates (else what is the order?)
                     if self.macros.insert(name.to_string(), macro_def).is_some() {
@@ -377,7 +405,7 @@ impl<'source> MacroScopeExpander<'source> {
 
             // Strip the comment from a line and ignore if empty, this means
             // we only parse actual tokens
-            let tokens = tokenize(&line.text);
+            let tokens = tokenise(&line.text);
 
             if tokens.is_empty() {
                 continue;
@@ -468,7 +496,7 @@ fn is_safe_directive(line: &str) -> bool {
 ///
 /// This will strip comments, split whitespace and then push braces that
 /// are stuck onto tokens as seperate tokens.
-fn tokenize(line: &str) -> Vec<String> {
+fn tokenise(line: &str) -> Vec<String> {
     let mut out = Vec::new();
 
     for token in strip_comment(line).split_whitespace() {
@@ -574,8 +602,9 @@ fn collect_body(
     lines: &mut std::iter::Enumerate<std::str::Lines<'_>>,
     line_number: usize,
     name: &str,
-) -> Result<Vec<BodyLine>, LoweringError> {
+) -> Result<(Vec<BodyLine>, Vec<MatchReq>), LoweringError> {
     let mut body = Vec::new();
+    let mut match_reqs = Vec::new();
     let mut terminated = false;
 
     for (body_index, body_line) in lines.by_ref() {
@@ -595,6 +624,36 @@ fn collect_body(
         if body_line == "@end" {
             terminated = true;
             break;
+        }
+
+        // Match patterns with regex
+        if body_line.starts_with("@matches") {
+            let body_split = body_line
+                .splitn(3, char::is_whitespace)
+                .into_iter()
+                .collect::<Vec<_>>();
+
+            // Length of directive args must be at least 3 (@matches param match_pattern)
+            if body_split.len() < 3 {
+                return Err(LoweringErrorKind::InvalidMatchPattern.with_line(body_index + 1));
+            }
+
+            // Second argument will then be the param
+            let param = body_split[1].to_string();
+
+            // Next we need to extract the pattern which is the remaining part
+            let pattern = Regex::new(body_split[2]).map_err(|err| {
+                LoweringErrorKind::MatchPatternRegexFailCompile { regex_error: err }
+                    .with_line(body_index + 1)
+            })?;
+
+            // Now build the @matches
+            match_reqs.push(MatchReq {
+                param,
+                match_req: pattern,
+            });
+
+            continue;
         }
 
         // Nested macro definitions aren't allowed!
@@ -617,7 +676,7 @@ fn collect_body(
         .with_line(line_number));
     }
 
-    Ok(body)
+    Ok((body, match_reqs))
 }
 
 /// Validate all the used macro parameters in its body actually
@@ -637,7 +696,7 @@ fn validate_body(
             continue;
         }
 
-        for token in tokenize(&body_line.text) {
+        for token in tokenise(&body_line.text) {
             // Labels can be a param which ends with `:`
             let stem = token.strip_suffix(':').unwrap_or(&token);
 
@@ -730,7 +789,7 @@ impl<'a> ArgCursor<'a> {
                 return Chunk::LineBreak;
             }
 
-            let tokens = tokenize(&line.text);
+            let tokens = tokenise(&line.text);
 
             // @loc lines are metadata, never take these as an argument
             if tokens.first().map(String::as_str) == Some("@loc") {
@@ -920,7 +979,7 @@ fn expand_macro(
             continue;
         }
 
-        let tokens = tokenize(&body_line.text);
+        let tokens = tokenise(&body_line.text);
 
         if tokens.is_empty() {
             continue;
@@ -949,6 +1008,34 @@ fn expand_macro(
             continue;
         }
 
+        // Validate the macro args against matches
+        for match_req in &macro_def.match_req {
+            // Corresponding index in the actual params
+            let Some(index) = macro_def.params.iter().position(|p| match_req.param.eq(p)) else {
+                return Err(LoweringErrorKind::UndefinedMacroParameter {
+                    name: macro_name.to_string(),
+                    param: match_req.param.to_string(),
+                }
+                .with_origin(child));
+            };
+
+            // Grab the corresponding arg
+            let arg_matches = match &args[index] {
+                MacroArg::Token(token_arg) => match_req.match_req.is_match(&token_arg),
+                MacroArg::Block(lines) => lines
+                    .iter()
+                    .all(|line| match_req.match_req.is_match(&line.text)),
+            };
+
+            if !arg_matches {
+                return Err(LoweringErrorKind::MatchPatternFailed {
+                    param_name: match_req.param.clone(),
+                    match_req: match_req.match_req.clone(),
+                }
+                .with_origin(child));
+            }
+        }
+
         let mut rebuilt = Vec::with_capacity(tokens.len());
 
         for token in &tokens {
@@ -966,7 +1053,7 @@ fn expand_macro(
                         name: macro_name.to_string(),
                         param: param.to_string(),
                     }
-                    .with_line(origin.line_usize()));
+                    .with_origin(child));
                 };
 
                 // Inline expansion only permits parameters of type `Token`
@@ -976,7 +1063,7 @@ fn expand_macro(
                         name: macro_name.to_string(),
                         param: param.to_string(),
                     }
-                    .with_line(origin.line_usize()));
+                    .with_origin(child));
                 };
 
                 rebuilt.push(if colon {
@@ -1056,7 +1143,7 @@ fn resolve_scopes(lines: Vec<Line>) -> Result<Vec<Line>, LoweringError> {
         }
 
         // get rid of whitespace and turn into tokens
-        let tokens = tokenize(&line.text);
+        let tokens = tokenise(&line.text);
         let borrowed = tokens.iter().map(String::as_str).collect::<Vec<_>>();
 
         match borrowed.as_slice() {

@@ -3,6 +3,8 @@
 
 use std::fmt::Display;
 
+use regex::Regex;
+
 use crate::macro_scope_processor::Origin;
 
 /// All possible error kinds that can occurr
@@ -60,6 +62,27 @@ pub enum LoweringErrorKind {
     /// A nested macro definition was found, this is
     /// not permitted!
     NestedMacroDefinition,
+
+    /// A match pattern was found with invalid number of arguments!
+    InvalidMatchPattern,
+
+    /// A match pattern was found with an invalid match pattern
+    MatchPatternRegexFailCompile {
+        regex_error: regex::Error
+    },
+
+    /// A match pattern was found with an invalid match param
+    /// it didn't match any of the argument to the macro's params!
+    MatchPatternInvalidParam {
+        param_name: String
+    },
+
+    /// A match pattern failed to match when testing against real
+    /// macro argument for this param
+    MatchPatternFailed {
+        param_name: String,
+        match_req: Regex
+    },
 
     /// A macro was defined without the corresponding @end
     UnterminatedMacro {
@@ -310,6 +333,30 @@ impl Display for LoweringErrorKind {
                 write!(
                     f,
                     "The directive `{directive}` was used outside of any enclosing scope!"
+                )
+            }
+            Self::InvalidMatchPattern => {
+                write!(
+                    f,
+                    "The `@matches` directive did not recieve the correct number of arguments!"
+                )
+            }
+            Self::MatchPatternRegexFailCompile { regex_error } => {
+                write!(
+                    f,
+                    "The `@matches` directive did not recieve a valid regex! compilation failed with error: `{regex_error}`"
+                )
+            }
+            Self::MatchPatternInvalidParam { param_name } => {
+                write!(
+                    f,
+                    "The `@matches` directive did not recieve a real macro parameter name! got `{param_name}`"
+                )
+            }
+            Self::MatchPatternFailed { param_name, match_req } => {
+                write!(
+                    f,
+                    "The `@matches` pattern testing failed for this parameter `{param_name}`, with match requirement of `{match_req}`"
                 )
             }
             Self::ScopeTargetUnavailable { directive } => {
