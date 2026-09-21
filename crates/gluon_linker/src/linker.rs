@@ -247,206 +247,55 @@ impl Linker {
                 continue;
             }
 
-            let tokens: Vec<&str> = line.split_whitespace().collect();
-            
+            let blocked_line = line.replace("{", "\n{\n");
+            for line in blocked_line.lines() {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
 
-            match tokens.as_slice() {
-                // @macro <name> (<param>, ...) opens a macro body,
-                // we should be careful to not replace any of the params with remapped things
-                ["@macro", _, params @ ..] => {
-                    let param_names = params
-                        .join(" ")
-                        .replace(['(', ')', ','], " ")
-                        .split_whitespace()
-                        .map(|name| format!("${name}"))
-                        .collect();
+                match tokens.as_slice() {
+                    // @macro <name> (<param>, ...) opens a macro body,
+                    // we should be careful to not replace any of the params with remapped things
+                    ["@macro", _, params @ ..] => {
+                        let param_names = params
+                            .join(" ")
+                            .replace(['(', ')', ','], " ")
+                            .split_whitespace()
+                            .map(|name| format!("${name}"))
+                            .collect();
 
-                    macro_params = Some(param_names);
-                    output.push(tokens.join(" "));
-                }
-
-                // @end closes a macro body
-                ["@end", ..] => {
-                    macro_params = None;
-                    output.push(tokens.join(" "));
-                }
-
-                // globals remapping
-                [
-                    op @ ("store.global" | "load.global" | "log" | "stg"),
-                    global,
-                ] => {
-                    // Do not overwrite macro params!
-                    if let Some(params) = &macro_params
-                        && params.iter().any(|param| param == global)
-                    {
-                        output.push(format!("{op} {global}"));
-                        continue;
-                    }
-
-                    // Get the name from the map, else test if its in the valid symbols map.
-                    let new_global_name = match globals_map.get(*global).ok_or_else(|| {
-                        LinkerErrorKind::UndefinedName {
-                            name: global.to_string(),
-                        }
-                        .with_line(line_number, file.full_file_name.clone())
-                    }) {
-                        Ok(name) => name,
-                        Err(error) => {
-                            if valid_symbols.contains(*global) {
-                                *global
-                            } else {
-                                errors.push(error);
-                                continue;
-                            }
-                        }
-                    };
-
-                    push_out(
-                        get_file_idx(loc_maps, &file.full_file_name),
-                        format!("{op} {new_global_name}"),
-                        line_number,
-                        &mut output,
-                    );
-                }
-
-                // object remapping
-                [op @ ("object.new" | "onw"), object] => {
-                    // Do not overwrite macro params!
-                    if let Some(params) = &macro_params
-                        && params.iter().any(|param| param == object)
-                    {
-                        output.push(format!("{op} {object}"));
-                        continue;
-                    }
-
-                    let new_object_name = match object_map.get(*object).ok_or_else(|| {
-                        LinkerErrorKind::UndefinedName {
-                            name: object.to_string(),
-                        }
-                        .with_line(line_number, file.full_file_name.clone())
-                    }) {
-                        Ok(name) => name,
-                        Err(error) => {
-                            if valid_symbols.contains(*object) {
-                                *object
-                            } else {
-                                errors.push(error);
-                                continue;
-                            }
-                        }
-                    };
-
-                    push_out(
-                        get_file_idx(loc_maps, &file.full_file_name),
-                        format!("{op} {new_object_name}"),
-                        line_number,
-                        &mut output,
-                    );
-                }
-
-                [op @ ("object.set" | "ost" | "object.get" | "ogt"), object] => {
-                    // Do not overwrite macro params! (they dont have dots anyway)
-                    if let Some(params) = &macro_params
-                        && params.iter().any(|param| param == object)
-                    {
-                        output.push(format!("{op} {object}"));
-                        continue;
-                    }
-
-                    // We the field and object name (2 elements)
-                    let split_access = object.split(".").collect::<Vec<_>>();
-
-                    // Fail in lowering.
-                    if split_access.len() != 2 {
+                        macro_params = Some(param_names);
                         output.push(tokens.join(" "));
-                        continue;
                     }
 
-                    let object_name = split_access[0];
-                    let field = split_access[1];
-
-                    let new_object_name = match object_map.get(object_name).ok_or_else(|| {
-                        LinkerErrorKind::UndefinedName {
-                            name: object_name.to_string(),
-                        }
-                        .with_line(line_number, file.full_file_name.clone())
-                    }) {
-                        Ok(name) => name,
-                        Err(error) => {
-                            if valid_symbols.contains(object_name) {
-                                object_name
-                            } else {
-                                errors.push(error);
-                                continue;
-                            }
-                        }
-                    };
-
-                    push_out(
-                        get_file_idx(loc_maps, &file.full_file_name),
-                        format!("{op} {new_object_name}.{field}"),
-                        line_number,
-                        &mut output,
-                    );
-                }
-
-                // function remapping
-                [op @ ("call" | "cal" | "tail.call" | "tcl"), function] => {
-                    // Do not overwrite macro params!
-                    if let Some(params) = &macro_params
-                        && params.iter().any(|param: &String| param == function)
-                    {
-                        output.push(format!("{op} {function}"));
-                        continue;
+                    // @end closes a macro body
+                    ["@end", ..] => {
+                        macro_params = None;
+                        output.push(tokens.join(" "));
                     }
 
-                    let new_function_name = match function_map.get(*function).ok_or_else(|| {
-                        LinkerErrorKind::UndefinedName {
-                            name: function.to_string(),
+                    // globals remapping
+                    [
+                        op @ ("store.global" | "load.global" | "log" | "stg"),
+                        global,
+                    ] => {
+                        // Do not overwrite macro params!
+                        if let Some(params) = &macro_params
+                            && params.iter().any(|param| param == global)
+                        {
+                            output.push(format!("{op} {global}"));
+                            continue;
                         }
-                        .with_line(line_number, file.full_file_name.clone())
-                    }) {
-                        Ok(name) => name,
-                        Err(error) => {
-                            if valid_symbols.contains(*function) {
-                                *function
-                            } else {
-                                errors.push(error);
-                                continue;
-                            }
-                        }
-                    };
 
-                    push_out(
-                        get_file_idx(loc_maps, &file.full_file_name),
-                        format!("{op} {new_function_name}"),
-                        line_number,
-                        &mut output,
-                    );
-                }
-
-                // capabilities remapping
-                [op @ ("call.cap" | "cap"), capability] => {
-                    // Do not overwrite macro params!
-                    if let Some(params) = &macro_params
-                        && params.iter().any(|param| param == capability)
-                    {
-                        output.push(format!("{op} {capability}"));
-                        continue;
-                    }
-
-                    let new_capability_name =
-                        match capability_map.get(*capability).ok_or_else(|| {
+                        // Get the name from the map, else test if its in the valid symbols map.
+                        let new_global_name = match globals_map.get(*global).ok_or_else(|| {
                             LinkerErrorKind::UndefinedName {
-                                name: capability.to_string(),
+                                name: global.to_string(),
                             }
                             .with_line(line_number, file.full_file_name.clone())
                         }) {
                             Ok(name) => name,
                             Err(error) => {
-                                if valid_symbols.contains(*capability) {
-                                    *capability
+                                if valid_symbols.contains(*global) {
+                                    *global
                                 } else {
                                     errors.push(error);
                                     continue;
@@ -454,61 +303,214 @@ impl Linker {
                             }
                         };
 
-                    push_out(
-                        get_file_idx(loc_maps, &file.full_file_name),
-                        format!("{op} {new_capability_name}"),
-                        line_number,
-                        &mut output,
-                    );
-                }
+                        push_out(
+                            get_file_idx(loc_maps, &file.full_file_name),
+                            format!("{op} {new_global_name}"),
+                            line_number,
+                            &mut output,
+                        );
+                    }
 
-                // A macro invocation remapping
-                [invocation, args @ ..] if invocation.starts_with("!") => {
-                    // The name of the macro
-                    let name = invocation.strip_prefix("!").unwrap_or(*invocation);
-
-                    // Find new remapped name
-                    let new_macro_name = match macro_map.get(name).ok_or_else(|| {
-                        LinkerErrorKind::UndefinedName {
-                            name: name.to_string(),
+                    // object remapping
+                    [op @ ("object.new" | "onw"), object] => {
+                        // Do not overwrite macro params!
+                        if let Some(params) = &macro_params
+                            && params.iter().any(|param| param == object)
+                        {
+                            output.push(format!("{op} {object}"));
+                            continue;
                         }
-                        .with_line(line_number, file.full_file_name.clone())
-                    }) {
-                        Ok(name) => name,
-                        Err(error) => {
-                            if valid_symbols.contains(name) {
-                                name
-                            } else {
-                                errors.push(error);
-                                continue;
+
+                        let new_object_name = match object_map.get(*object).ok_or_else(|| {
+                            LinkerErrorKind::UndefinedName {
+                                name: object.to_string(),
                             }
+                            .with_line(line_number, file.full_file_name.clone())
+                        }) {
+                            Ok(name) => name,
+                            Err(error) => {
+                                if valid_symbols.contains(*object) {
+                                    *object
+                                } else {
+                                    errors.push(error);
+                                    continue;
+                                }
+                            }
+                        };
+
+                        push_out(
+                            get_file_idx(loc_maps, &file.full_file_name),
+                            format!("{op} {new_object_name}"),
+                            line_number,
+                            &mut output,
+                        );
+                    }
+
+                    [op @ ("object.set" | "ost" | "object.get" | "ogt"), object] => {
+                        // Do not overwrite macro params! (they dont have dots anyway)
+                        if let Some(params) = &macro_params
+                            && params.iter().any(|param| param == object)
+                        {
+                            output.push(format!("{op} {object}"));
+                            continue;
                         }
-                    };
 
-                    // Rebuild new macro invocation with all the arguments
-                    let mut rebuilt = vec![format!("!{new_macro_name}")];
-                    rebuilt.extend(args.iter().map(|token| token.to_string()));
+                        // We the field and object name (2 elements)
+                        let split_access = object.split(".").collect::<Vec<_>>();
 
-                    push_out(
+                        // Fail in lowering.
+                        if split_access.len() != 2 {
+                            output.push(tokens.join(" "));
+                            continue;
+                        }
+
+                        let object_name = split_access[0];
+                        let field = split_access[1];
+
+                        let new_object_name = match object_map.get(object_name).ok_or_else(|| {
+                            LinkerErrorKind::UndefinedName {
+                                name: object_name.to_string(),
+                            }
+                            .with_line(line_number, file.full_file_name.clone())
+                        }) {
+                            Ok(name) => name,
+                            Err(error) => {
+                                if valid_symbols.contains(object_name) {
+                                    object_name
+                                } else {
+                                    errors.push(error);
+                                    continue;
+                                }
+                            }
+                        };
+
+                        push_out(
+                            get_file_idx(loc_maps, &file.full_file_name),
+                            format!("{op} {new_object_name}.{field}"),
+                            line_number,
+                            &mut output,
+                        );
+                    }
+
+                    // function remapping
+                    [op @ ("call" | "cal" | "tail.call" | "tcl"), function] => {
+                        // Do not overwrite macro params!
+                        if let Some(params) = &macro_params
+                            && params.iter().any(|param: &String| param == function)
+                        {
+                            output.push(format!("{op} {function}"));
+                            continue;
+                        }
+
+                        let new_function_name = match function_map.get(*function).ok_or_else(|| {
+                            LinkerErrorKind::UndefinedName {
+                                name: function.to_string(),
+                            }
+                            .with_line(line_number, file.full_file_name.clone())
+                        }) {
+                            Ok(name) => name,
+                            Err(error) => {
+                                if valid_symbols.contains(*function) {
+                                    *function
+                                } else {
+                                    errors.push(error);
+                                    continue;
+                                }
+                            }
+                        };
+
+                        push_out(
+                            get_file_idx(loc_maps, &file.full_file_name),
+                            format!("{op} {new_function_name}"),
+                            line_number,
+                            &mut output,
+                        );
+                    }
+
+                    // capabilities remapping
+                    [op @ ("call.cap" | "cap"), capability] => {
+                        // Do not overwrite macro params!
+                        if let Some(params) = &macro_params
+                            && params.iter().any(|param| param == capability)
+                        {
+                            output.push(format!("{op} {capability}"));
+                            continue;
+                        }
+
+                        let new_capability_name =
+                            match capability_map.get(*capability).ok_or_else(|| {
+                                LinkerErrorKind::UndefinedName {
+                                    name: capability.to_string(),
+                                }
+                                .with_line(line_number, file.full_file_name.clone())
+                            }) {
+                                Ok(name) => name,
+                                Err(error) => {
+                                    if valid_symbols.contains(*capability) {
+                                        *capability
+                                    } else {
+                                        errors.push(error);
+                                        continue;
+                                    }
+                                }
+                            };
+
+                        push_out(
+                            get_file_idx(loc_maps, &file.full_file_name),
+                            format!("{op} {new_capability_name}"),
+                            line_number,
+                            &mut output,
+                        );
+                    }
+
+                    // A macro invocation remapping
+                    [invocation, args @ ..] if invocation.starts_with("!") => {
+                        // The name of the macro
+                        let name = invocation.strip_prefix("!").unwrap_or(*invocation);
+
+                        // Find new remapped name
+                        let new_macro_name = match macro_map.get(name).ok_or_else(|| {
+                            LinkerErrorKind::UndefinedName {
+                                name: name.to_string(),
+                            }
+                            .with_line(line_number, file.full_file_name.clone())
+                        }) {
+                            Ok(name) => name,
+                            Err(error) => {
+                                if valid_symbols.contains(name) {
+                                    name
+                                } else {
+                                    errors.push(error);
+                                    continue;
+                                }
+                            }
+                        };
+
+                        // Rebuild new macro invocation with all the arguments
+                        let mut rebuilt = vec![format!("!{new_macro_name}")];
+                        rebuilt.extend(args.iter().map(|token| token.to_string()));
+
+                        push_out(
+                            get_file_idx(loc_maps, &file.full_file_name),
+                            rebuilt.join(" "),
+                            line_number,
+                            &mut output,
+                        );
+                    }
+
+                    // Directives cant have @loc attached
+                    directive if directive.iter().any(|tok| tok.starts_with("@")) => {
+                        output.push(directive.join(" "))
+                    }
+
+                    // Non-remappable things
+                    other => push_out(
                         get_file_idx(loc_maps, &file.full_file_name),
-                        rebuilt.join(" "),
+                        other.join(" "),
                         line_number,
                         &mut output,
-                    );
+                    ),
                 }
-
-                // Directives cant have @loc attached
-                directive if directive.iter().any(|tok| tok.starts_with("@")) => {
-                    output.push(directive.join(" "))
-                }
-
-                // Non-remappable things
-                other => push_out(
-                    get_file_idx(loc_maps, &file.full_file_name),
-                    other.join(" "),
-                    line_number,
-                    &mut output,
-                ),
             }
         }
 
