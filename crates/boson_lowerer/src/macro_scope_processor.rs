@@ -628,10 +628,7 @@ fn collect_body(
 
         // Match patterns with regex
         if body_line.starts_with("@matches") {
-            let body_split = body_line
-                .splitn(3, char::is_whitespace)
-                .into_iter()
-                .collect::<Vec<_>>();
+            let body_split = body_line.splitn(3, char::is_whitespace).collect::<Vec<_>>();
 
             // Length of directive args must be at least 3 (@matches param match_pattern)
             if body_split.len() < 3 {
@@ -1021,7 +1018,7 @@ fn expand_macro(
 
             // Grab the corresponding arg
             let arg_matches = match &args[index] {
-                MacroArg::Token(token_arg) => match_req.match_req.is_match(&token_arg),
+                MacroArg::Token(token_arg) => match_req.match_req.is_match(token_arg),
                 MacroArg::Block(lines) => lines
                     .iter()
                     .all(|line| match_req.match_req.is_match(&line.text)),

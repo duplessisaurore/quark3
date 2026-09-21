@@ -68,20 +68,20 @@ pub enum LoweringErrorKind {
 
     /// A match pattern was found with an invalid match pattern
     MatchPatternRegexFailCompile {
-        regex_error: regex::Error
+        regex_error: regex::Error,
     },
 
     /// A match pattern was found with an invalid match param
     /// it didn't match any of the argument to the macro's params!
     MatchPatternInvalidParam {
-        param_name: String
+        param_name: String,
     },
 
     /// A match pattern failed to match when testing against real
     /// macro argument for this param
     MatchPatternFailed {
         param_name: String,
-        match_req: Regex
+        match_req: Regex,
     },
 
     /// A macro was defined without the corresponding @end
@@ -353,7 +353,10 @@ impl Display for LoweringErrorKind {
                     "The `@matches` directive did not recieve a real macro parameter name! got `{param_name}`"
                 )
             }
-            Self::MatchPatternFailed { param_name, match_req } => {
+            Self::MatchPatternFailed {
+                param_name,
+                match_req,
+            } => {
                 write!(
                     f,
                     "The `@matches` pattern testing failed for this parameter `{param_name}`, with match requirement of `{match_req}`"
