@@ -631,6 +631,26 @@ A name beginning with `%` is treated as a name introduced by the macro and recei
 
 This hygiene mechanism is particularly useful for macros that introduce labels.
 
+We can also enforce that a macro parameter at compile time matches some regex pattern using `@matches` in the macro body, etc:
+
+```
+@macro let (name, =, init)
+    @local $name
+    $init
+    store.local $name
+    @matches = =
+@end
+```
+
+which would be used something like:
+
+```
+@fn main ()
+    !let x = { push.int 5 }
+    push.unit
+    return
+```
+
 ### Scope Control
 
 Boson3 provides `@scope_push` and `@scope_pop` for defining scopes used by special `@break` and `@continue` directives.
