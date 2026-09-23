@@ -247,7 +247,7 @@ impl Linker {
                 continue;
             }
 
-            let blocked_line = line.replace("{", "\n{\n");
+            let blocked_line = line.replace("{", "\n{\n").replace("}", "\n}");
             for line in blocked_line.lines() {
                 let tokens: Vec<&str> = line.split_whitespace().collect();
 
