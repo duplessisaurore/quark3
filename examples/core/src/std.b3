@@ -1,0 +1,84 @@
+// std.b3
+//
+// This file contains a bunch of macros that allow
+// the user to use Boson3 more similar to a C-like language
+
+@namespace std
+
+// = Primitive Values = //
+
+// ### @macro std::int <literal>
+// Creates an integer literal at the current position
+//
+// Essentially just pushes the integer literal.
+@macro int (literal)
+    push.int $literal
+@end
+
+// ### @macro std::uint <literal>
+// Creates an unsigned integer literal at the current position
+//
+// Essentially just pushes the unsigned integer literal.
+@macro uint (literal)
+    push.uint $literal
+@end
+
+// ### @macro std::float <literal>
+// Creates a float literal at the current position
+//
+// Essentially just pushes the float literal.
+@macro float (literal)
+    push.float $literal
+@end
+
+// ### @macro std::bool <literal>
+// Creates a boolean literal at the current position
+//
+// Essentially just pushes the boolean literal.
+@macro bool (literal)
+    push.bool $literal
+@end
+
+// ### @macro std::unit
+// Creates a unit () at the current position
+//
+// Essentially just pushes the unit value.
+@macro unit ()
+    push.unit
+@end
+
+// = Locals & Globals = //
+
+// ## @macro std::set <name> = <value>
+// Sets a local to a value in the current function's scope with name
+//
+// The local is set to the value specified in `value`.
+@macro set (name, =, value)
+    @local $name
+    $value
+    store.local $name
+    @matches = ^=$
+@end
+
+// ## @macro std::global_set <name> = <value>
+// Sets a global to a value with name
+//
+// This does **not** define the global, the global still needs to be defined
+// elsewhere with the @global directive
+@macro global_set (name, =, value)
+    $value
+    store.global $value
+    @matches = ^=$
+@end
+
+// ## @macro std::get <name>
+// Returns the value stored in a local with name
+@macro get (name)
+    load.local $name
+@end
+
+// ## @macro std::global_get <name>
+// Returns the value stored in a global with name
+@macro global_get (name)
+    load.global $name
+@end

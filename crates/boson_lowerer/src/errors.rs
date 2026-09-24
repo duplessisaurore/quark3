@@ -3,8 +3,6 @@
 
 use std::fmt::Display;
 
-use regex::Regex;
-
 use crate::macro_scope_processor::Origin;
 
 /// All possible error kinds that can occurr
@@ -77,11 +75,15 @@ pub enum LoweringErrorKind {
         param_name: String,
     },
 
-    /// A match pattern failed to match when testing against real
-    /// macro argument for this param
-    MatchPatternFailed {
-        param_name: String,
-        match_req: Regex,
+    /// All macros with this name failed to match at this position.
+    AllMacroMatchesFailed {
+        macro_name: String,
+    },
+
+    /// More than one macro with this name matched here
+    AmbiguousMacroMatch {
+        macro_name: String,
+        macro_origins: Vec<Origin>,
     },
 
     /// A macro was defined without the corresponding @end
@@ -89,9 +91,11 @@ pub enum LoweringErrorKind {
         name: String,
     },
 
-    /// Two macros were defined with the same name
-    DuplicateMacro {
+    /// Two macros were defined with the same name but differing parameter counts
+    DuplicateNonSameParamCountMacro {
         name: String,
+        original_count: usize,
+        new_count: usize,
     },
 
     /// Attempted to invoke an invalid macro which was
@@ -268,10 +272,14 @@ impl Display for LoweringErrorKind {
                     "The macro `{name}` during expansion encounted the block-type parameter `{param}` being used in an in-line context!"
                 )
             }
-            Self::DuplicateMacro { name } => {
+            Self::DuplicateNonSameParamCountMacro {
+                name,
+                original_count,
+                new_count,
+            } => {
                 write!(
                     f,
-                    "The macro `{name}` was found to have more than one definition (duplicate)!"
+                    "The macro `{name}` was found to have more than one definition (duplicate) with a differing parameter count, original: `{original_count}` params, new: `{new_count}` params!"
                 )
             }
             Self::UndefinedMacro { name } => {
@@ -353,13 +361,22 @@ impl Display for LoweringErrorKind {
                     "The `@matches` directive did not recieve a real macro parameter name! got `{param_name}`"
                 )
             }
-            Self::MatchPatternFailed {
-                param_name,
-                match_req,
-            } => {
+            Self::AllMacroMatchesFailed { macro_name } => {
                 write!(
                     f,
-                    "The `@matches` pattern testing failed for this parameter `{param_name}`, with match requirement of `{match_req}`"
+                    "No macro with the name: `{macro_name}` was found to match here. All possible `@matches` pattern testing failed to match."
+                )
+            }
+            Self::AmbiguousMacroMatch {
+                macro_name,
+                macro_origins,
+            } => {
+                let macro_origin_strings =
+                    macro_origins.iter().map(|origin| origin.to_string());
+
+                write!(
+                    f,
+                    "Multiple macros with name: `{macro_name}` were found to match here. This is ambiguous as to which macro we should actually expand! All macro origins: `{macro_origin_strings:?}`"
                 )
             }
             Self::ScopeTargetUnavailable { directive } => {

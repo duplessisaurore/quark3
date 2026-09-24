@@ -247,12 +247,14 @@ impl<'source> BosonLowerer<'source> {
                         .with_line(line_number));
                     };
 
-                    // Add to the locals map for the current function
-                    function.locals.insert(name.to_string(), function.next_slot);
-                    function.next_slot += 1;
+                    // Add to the locals map for the current function if not already declared
+                    if !function.locals.contains_key(*name) {
+                        function.locals.insert(name.to_string(), function.next_slot);
+                        function.next_slot += 1;
 
-                    // The local count has grown so we need to update the @fn line
-                    self.out[function.line] = function.fn_line();
+                        // The local count has grown so we need to update the @fn line
+                        self.out[function.line] = function.fn_line();
+                    }
                 }
 
                 // These @local directives are invalid..

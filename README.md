@@ -106,7 +106,7 @@ This directive defines a new entry in the **function table** of the image.
 
 - *args* specifies how many arguments this function takes.
 
-- *locals* specifics how large the locals of this function should be, it must exceed *args* as *args* are copied into the first n args locals in `Lepton3`
+- *locals* specifics how large the locals of this function should be, it must exceed or match *args* as *args* are copied into the first n args locals in `Lepton3`.
 
 
 **Example**:
@@ -172,7 +172,7 @@ into some function's body, for example:
     load.local
 
     push.int 0
-    int.equal
+    numeric.equal
 
     jump.if.true done
 
@@ -180,7 +180,7 @@ into some function's body, for example:
     load.local
 
     push.int 1
-    int.sub
+    numeric.sub
 
     tail.call count_down
 
@@ -631,7 +631,7 @@ A name beginning with `%` is treated as a name introduced by the macro and recei
 
 This hygiene mechanism is particularly useful for macros that introduce labels.
 
-We can also enforce that a macro parameter at compile time matches some regex pattern using `@matches` in the macro body, etc:
+We can also enforce that a macro parameter at compile time matches some regex pattern (as supported by the rust `Regex` crate) using `@matches` in the macro body, etc:
 
 ```
 @macro let (name, =, init)
@@ -650,6 +650,8 @@ which would be used something like:
     push.unit
     return
 ```
+
+The usage of `@matches` can be really powerful! `Boson3` allows declaration of multiple macros under the same name, but only permits expansion of one macro at the end. This means that multiple macros can be called say `set`, but depending on the second parameter and all the different `@matches`, we can get differing behaviour! 
 
 ### Scope Control
 
@@ -719,7 +721,6 @@ This is done through the `@string` directive.
 This expands to
 
 ```
-push.uint 32
 push.uint 72
 push.uint 101
 push.uint 108
@@ -727,13 +728,13 @@ push.uint 108
 push.uint 111
 push.uint 44
 push.uint 32
-push.uint 119
+push.uint 87
 push.uint 111
 push.uint 114
 push.uint 108
 push.uint 100
 push.uint 33
-push.uint 14
+push.uint 13
 array.new
 ```
 

@@ -128,6 +128,9 @@ struct MatchReq {
 /// logic for hygiene
 #[derive(Debug)]
 struct Macro {
+    /// The origin the macro was declared at
+    decl_origin: Origin,
+
     /// Parameter names introduced by the macro,
     /// with the dedicated macro sigil stripped.
     params: Vec<String>,
@@ -158,7 +161,8 @@ enum MacroArg {
 #[derive(Debug)]
 pub struct MacroScopeExpander<'source> {
     /// All collected macro definitions by name.
-    macros: HashMap<String, Macro>,
+    /// Multiple macros can exist under the same name (depending on regex @matches for real match)
+    macros: HashMap<String, Vec<Macro>>,
 
     /// All the filenames for later mapping purposes
     filenames: HashMap<u64, String>,
@@ -324,18 +328,32 @@ impl<'source> MacroScopeExpander<'source> {
                     }
 
                     let macro_def = Macro {
+                        decl_origin: origin,
                         params,
                         body,
                         match_req: matches,
                     };
 
-                    // Prevent duplicates (else what is the order?)
-                    if self.macros.insert(name.to_string(), macro_def).is_some() {
-                        return Err(LoweringErrorKind::DuplicateMacro {
-                            name: name.to_string(),
+                    // There can be no duplicate macro entries with differing parameter counts (else number of args to grab is entirely ambiguous)
+                    let macro_entries = self.macros.entry(name.to_string()).or_default();
+                    let this_macro_param_count = macro_def.params.len();
+
+                    // Validate that the macro entry parameter count matches, otherwise error.
+                    macro_entries.first().map_or(Ok(()), |macro_entry| {
+                        let macro_param_count = macro_entry.params.len();
+                        if macro_param_count != this_macro_param_count {
+                            Err(LoweringErrorKind::DuplicateNonSameParamCountMacro {
+                                name: name.to_string(),
+                                original_count: macro_param_count,
+                                new_count: this_macro_param_count,
+                            }
+                            .with_line(line_number))
+                        } else {
+                            Ok(())
                         }
-                        .with_line(line_number));
-                    }
+                    })?;
+
+                    macro_entries.push(macro_def);
                 }
 
                 // An @end with no @macro that it closes
@@ -453,16 +471,20 @@ impl<'source> MacroScopeExpander<'source> {
             // Get the file name if it exists.
             let file_name = self.filenames.get(&line.origin.file).map(String::as_str);
 
-            let macro_def = &self.macros[name];
+            let macro_defs = &self.macros[name];
+            let macro_argc = macro_defs
+                .first()
+                .map(|macro_def| macro_def.params.len())
+                .expect("macro vec should never be created without at least one push..");
 
             let rest = borrowed[1..].iter().map(|tok| tok.to_string()).collect();
 
             // Parse all of the arguments to this macro
             let mut cursor = ArgCursor::new(&mut lines, line.origin.clone(), rest);
-            let args = cursor.parse_args(macro_def.params.len(), name)?;
+            let args = cursor.parse_args(macro_argc, name)?;
 
             // Expand the actual macro
-            let expanded = expand_macro(macro_def, &args, id, name, &line.origin, file_name)?;
+            let expanded = expand_macro(macro_defs, &args, id, name, &line.origin, file_name)?;
 
             current_expansion_out.extend(expanded);
         }
@@ -931,7 +953,7 @@ impl<'a> ArgCursor<'a> {
 
 /// Produce one expansion of a macro's output block
 fn expand_macro(
-    macro_def: &Macro,
+    macro_defs: &Vec<Macro>,
     args: &[MacroArg],
     id: u64,
     macro_name: &str,
@@ -965,6 +987,61 @@ fn expand_macro(
             child.clone(),
         ));
     }
+
+    // Try find the first matching macro definition
+    let mut matched_definitions = vec![];
+    'macro_test: for test_def in macro_defs {
+        // Test each match requirement
+        for match_req in &test_def.match_req {
+            // Corresponding index in the actual params
+            let Some(index) = test_def.params.iter().position(|p| match_req.param.eq(p)) else {
+                return Err(LoweringErrorKind::UndefinedMacroParameter {
+                    name: macro_name.to_string(),
+                    param: match_req.param.to_string(),
+                }
+                .with_origin(child));
+            };
+
+            // Grab the corresponding arg
+            let arg_matches = match &args[index] {
+                MacroArg::Token(token_arg) => match_req.match_req.is_match(token_arg),
+                MacroArg::Block(lines) => lines
+                    .iter()
+                    .all(|line| match_req.match_req.is_match(&line.text)),
+            };
+
+            if !arg_matches {
+                continue 'macro_test;
+            }
+        }
+
+        // All args must have matched here so add to matched_definitions
+        matched_definitions.push(test_def);
+    }
+
+    // matched definitions should only have ONE definition matching here else kaboomy
+    if matched_definitions.is_empty() {
+        return Err(LoweringErrorKind::AllMacroMatchesFailed {
+            macro_name: macro_name.to_string(),
+        }
+        .with_origin(child));
+    }
+
+    if matched_definitions.len() > 1 {
+        return Err(LoweringErrorKind::AmbiguousMacroMatch {
+            macro_name: macro_name.to_string(),
+            macro_origins: matched_definitions
+                .into_iter()
+                .map(|macro_def| macro_def.decl_origin.clone())
+                .collect(),
+        }
+        .with_origin(child));
+    }
+
+    // The actual matching macro.
+    let macro_def = matched_definitions
+        .first()
+        .expect("above checks ensure that there is at least one element in matched_definitions");
 
     for body_line in &macro_def.body {
         // Substitute params into raw directive
@@ -1003,34 +1080,6 @@ fn expand_macro(
                 MacroArg::Block(lines) => out.extend(lines.iter().cloned()),
             }
             continue;
-        }
-
-        // Validate the macro args against matches
-        for match_req in &macro_def.match_req {
-            // Corresponding index in the actual params
-            let Some(index) = macro_def.params.iter().position(|p| match_req.param.eq(p)) else {
-                return Err(LoweringErrorKind::UndefinedMacroParameter {
-                    name: macro_name.to_string(),
-                    param: match_req.param.to_string(),
-                }
-                .with_origin(child));
-            };
-
-            // Grab the corresponding arg
-            let arg_matches = match &args[index] {
-                MacroArg::Token(token_arg) => match_req.match_req.is_match(token_arg),
-                MacroArg::Block(lines) => lines
-                    .iter()
-                    .all(|line| match_req.match_req.is_match(&line.text)),
-            };
-
-            if !arg_matches {
-                return Err(LoweringErrorKind::MatchPatternFailed {
-                    param_name: match_req.param.clone(),
-                    match_req: match_req.match_req.clone(),
-                }
-                .with_origin(child));
-            }
         }
 
         let mut rebuilt = Vec::with_capacity(tokens.len());
