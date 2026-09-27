@@ -651,7 +651,7 @@ which would be used something like:
     return
 ```
 
-The usage of `@matches` can be really powerful! `Boson3` allows declaration of multiple macros under the same name, but only permits expansion of one macro at the end. This means that multiple macros can be called say `set`, but depending on the second parameter and all the different `@matches`, we can get differing behaviour! 
+The usage of `@matches` can be really powerful! `Boson3` allows declaration of multiple macros under the same name with the same parameter count, but only permits expansion of one macro at the end. This means that multiple macros can be called say `set`, but depending on the second parameter and all the different `@matches`, we can get differing behaviour! 
 
 ### Scope Control
 

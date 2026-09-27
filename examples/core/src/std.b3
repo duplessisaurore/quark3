@@ -1,84 +1,2213 @@
 // std.b3
 //
-// This file contains a bunch of macros that allow
-// the user to use Boson3 more similar to a C-like language
+// This file contains a set of Boson3 macros that form standard constructs
+// found in other C-Like languages, and may serve as a good starting point for projects
+// built ontop of Boson3
+//
+// This library has no dependencies and may be used anywhere.
 
 @namespace std
 
-// = Primitive Values = //
-
-// ### @macro std::int <literal>
-// Creates an integer literal at the current position
+// ## @macro std::int <literal>
 //
-// Essentially just pushes the integer literal.
+// ### Description
+// Pushes one Int literal as a value. This does not convert the value represented in the literal.
+//
+// ### Arguments
+// <literal>: A single Int literal token accepted by push.int.
+//
 @macro int (literal)
     push.int $literal
 @end
 
-// ### @macro std::uint <literal>
-// Creates an unsigned integer literal at the current position
+// ## @macro std::uint <literal>
 //
-// Essentially just pushes the unsigned integer literal.
+// ### Description
+// Pushes one UInt literal as a value. This does not convert the value represented in the literal.
+//
+// ### Arguments
+// <literal>: A single UInt literal token accepted by push.uint.
+//
 @macro uint (literal)
     push.uint $literal
 @end
 
-// ### @macro std::float <literal>
-// Creates a float literal at the current position
+// ## @macro std::float <literal>
 //
-// Essentially just pushes the float literal.
+// ### Description
+// Pushes one Float literal as a value. This does not convert the value represented in the literal.
+//
+// ### Arguments
+// <literal>: A single Float literal token accepted by push.float.
+//
 @macro float (literal)
     push.float $literal
 @end
 
-// ### @macro std::bool <literal>
-// Creates a boolean literal at the current position
+// ## @macro std::bool <literal>
 //
-// Essentially just pushes the boolean literal.
+// ### Description
+// Pushes one Boolean literal as a value. This does not convert the value represented in the literal.
+//
+// ### Arguments
+// <literal>: A single Boolean literal token accepted by push.bool.
+//
 @macro bool (literal)
     push.bool $literal
 @end
 
-// ### @macro std::unit
-// Creates a unit () at the current position
+// ## @macro std::unit
 //
-// Essentially just pushes the unit value.
+// ### Description
+// Pushes the Unit value as an expression.
+//
+// ### Arguments
+// None.
+//
 @macro unit ()
     push.unit
 @end
 
-// = Locals & Globals = //
-
-// ## @macro std::set <name> = <value>
-// Sets a local to a value in the current function's scope with name
-//
-// The local is set to the value specified in `value`.
-@macro set (name, =, value)
-    @local $name
-    $value
-    store.local $name
-    @matches = ^=$
-@end
-
-// ## @macro std::global_set <name> = <value>
-// Sets a global to a value with name
-//
-// This does **not** define the global, the global still needs to be defined
-// elsewhere with the @global directive
-@macro global_set (name, =, value)
-    $value
-    store.global $value
-    @matches = ^=$
-@end
-
 // ## @macro std::get <name>
-// Returns the value stored in a local with name
+//
+// ### Description
+// Reads an existing, initialised local's value out.
+//
+// ### Arguments
+// <name>: The local name in this function.
+//
 @macro get (name)
     load.local $name
 @end
 
 // ## @macro std::global_get <name>
-// Returns the value stored in a global with name
+//
+// ### Description
+// Reads an existing, initialised global's value out.
+//
+// ### Arguments
+// <name>: The global's name.
+//
 @macro global_get (name)
     load.global $name
 @end
+
+// ## @macro std::let <name> = <rhs>
+//
+// ### Description
+// Declares a local and initialises it with one value of any type.
+//
+// Evaluates rhs once and leaves no value.
+//
+// Locals are scoped to the current function, a new binding of the same
+// name will be equivalent to a `set` assignment to that name.
+//
+// ### Arguments
+// <name>: A new local name in the current function.
+// <rhs>: The value to initialise the local with.
+//
+@macro let (name, operator, rhs)
+    @matches operator ^=$
+    @local $name
+    $rhs
+    store.local $name
+@end
+
+// ## @macro std::set <name> <operator> <rhs>
+//
+// ### Description
+// Sets an existing local to a value. 
+//
+// This does not declare the local, it must be declared elsewhere such as with `std::let`.
+// 
+// = assigns any value without reading the previous value.
+//
+// +=, -=, *=, <<=, &=, |=, and ^= use generic Int/UInt operations, these
+// require that the value stored in the local and the new rhs value are of
+// the same type.
+//
+// Float values should use float_set instead.
+//
+// Compound assignment reads the old value before evaluating rhs once and combining
+// them with an operator to produce the new value.
+//
+// Use int_set or uint_set for /=, %=, and >>= (these are special non-generic).
+//
+// ### Arguments
+// <name>: The existing local name.
+// <operator>: =, +=, -=, *=, <<=, &=, |=, or ^=.
+// <rhs>: The value to update the local with.
+//
+@macro set (name, operator, rhs)
+    @matches operator ^=$
+    $rhs
+    store.local $name
+@end
+
+@macro set (name, operator, rhs)
+    @matches operator ^\+=$
+    load.local $name
+    $rhs
+    numeric.add
+    store.local $name
+@end
+
+@macro set (name, operator, rhs)
+    @matches operator ^-=$
+    load.local $name
+    $rhs
+    numeric.sub
+    store.local $name
+@end
+
+@macro set (name, operator, rhs)
+    @matches operator ^\*=$
+    load.local $name
+    $rhs
+    numeric.mul
+    store.local $name
+@end
+
+@macro set (name, operator, rhs)
+    @matches operator ^<<=$
+    load.local $name
+    $rhs
+    numeric.shift.left
+    store.local $name
+@end
+
+@macro set (name, operator, rhs)
+    @matches operator ^&=$
+    load.local $name
+    $rhs
+    bitwise.and
+    store.local $name
+@end
+
+@macro set (name, operator, rhs)
+    @matches operator ^\|=$
+    load.local $name
+    $rhs
+    bitwise.or
+    store.local $name
+@end
+
+@macro set (name, operator, rhs)
+    @matches operator ^\^=$
+    load.local $name
+    $rhs
+    bitwise.xor
+    store.local $name
+@end
+
+// ## @macro std::int_set <name> <operator> <rhs>
+//
+// ### Description
+// Performs Int assignment or compound assignment on an existing local that should
+// be of the Int type.
+//
+// This forwards all of the underlying `std::set` operations, and allows for the usage
+// of >>=, %= and /= too.
+//
+// ### Arguments
+// <name>: The existing local name.
+// <operator>: Base `std::set` operators, and >>=, %= or /=.
+// <rhs>: The value to update the local with.
+//
+@macro int_set (name, operator, rhs)
+    @matches operator ^(=|\+=|-=|\*=|<<=|&=|\|=|\^=)$
+    !std::set $name $operator { $rhs }
+@end
+
+@macro int_set (name, operator, rhs)
+    @matches operator ^/=$
+    load.local $name
+    $rhs
+    int.div
+    store.local $name
+@end
+
+@macro int_set (name, operator, rhs)
+    @matches operator ^%=$
+    load.local $name
+    $rhs
+    int.mod
+    store.local $name
+@end
+
+@macro int_set (name, operator, rhs)
+    @matches operator ^>>=$
+    load.local $name
+    $rhs
+    int.shift.right
+    store.local $name
+@end
+
+// ## @macro std::uint_set <name> <operator> <rhs>
+//
+// ### Description
+// Performs UInt assignment or compound assignment on an existing local that should
+// be of the UInt type.
+//
+// This forwards all of the underlying `std::set` operations, and allows for the usage
+// of >>=, %= and /= too.
+//
+// ### Arguments
+// <name>: The existing local name.
+// <operator>: Base `std::set` operators, and >>=, %= or /=.
+// <rhs>: The value to update the local with.
+//
+@macro uint_set (name, operator, rhs)
+    @matches operator ^(=|\+=|-=|\*=|<<=|&=|\|=|\^=)$
+    !std::set $name $operator { $rhs }
+@end
+
+@macro uint_set (name, operator, rhs)
+    @matches operator ^/=$
+    load.local $name
+    $rhs
+    uint.div
+    store.local $name
+@end
+
+@macro uint_set (name, operator, rhs)
+    @matches operator ^%=$
+    load.local $name
+    $rhs
+    uint.mod
+    store.local $name
+@end
+
+@macro uint_set (name, operator, rhs)
+    @matches operator ^>>=$
+    load.local $name
+    $rhs
+    uint.shift.right
+    store.local $name
+@end
+
+// ## @macro std::float_set <name> <operator> <rhs>
+//
+// ### Description
+// Performs Float assignment or compound assignment on an existing local that should
+// be of the Float type.
+//
+// This permits for the operations of =, +=, -=, *=, /=, %=, where = is the same
+// underlying `std::set` operation.
+//
+// ### Arguments
+// <name>: The existing local name.
+// <operator>: =, +=, -=, *=, /= or %=.
+// <rhs>: The value to update the local with.
+//
+@macro float_set (name, operator, rhs)
+    @matches operator ^(=)$
+    !std::set $name $operator { $rhs }
+@end
+
+@macro float_set (name, operator, rhs)
+    @matches operator ^\+=$
+    load.local $name
+    $rhs
+    float.add
+    store.local $name
+@end
+
+@macro float_set (name, operator, rhs)
+    @matches operator ^-=$
+    load.local $name
+    $rhs
+    float.sub
+    store.local $name
+@end
+
+@macro float_set (name, operator, rhs)
+    @matches operator ^\*=$
+    load.local $name
+    $rhs
+    float.mul
+    store.local $name
+@end
+
+@macro float_set (name, operator, rhs)
+    @matches operator ^/=$
+    load.local $name
+    $rhs
+    float.div
+    store.local $name
+@end
+
+@macro float_set (name, operator, rhs)
+    @matches operator ^%=$
+    load.local $name
+    $rhs
+    float.mod
+    store.local $name
+@end
+
+// ## @macro std::global_set <name> <operator> <rhs>
+//
+// ### Description
+// Sets an existing global to a value. 
+//
+// This does not declare the global, it must be declared elsewhere such as with the `@global` directive.
+// 
+// = assigns any value without reading the previous value.
+//
+// +=, -=, *=, <<=, &=, |=, and ^= use generic Int/UInt operations, these
+// require that the value stored in the local and the new rhs value are of
+// the same type.
+//
+// Float values should use float_global_set instead.
+//
+// Compound assignment reads the old value before evaluating rhs once and combining
+// them with an operator to produce the new value.
+//
+// Use int_global_set or uint_global_set for /=, %=, and >>= (these are special non-generic).
+//
+// ### Arguments
+// <name>: The existing global name.
+// <operator>: =, +=, -=, *=, <<=, &=, |=, or ^=.
+// <rhs>: The value to update the global with.
+//
+@macro global_set (name, operator, rhs)
+    @matches operator ^=$
+    $rhs
+    store.global $name
+@end
+
+@macro global_set (name, operator, rhs)
+    @matches operator ^\+=$
+    load.global $name
+    $rhs
+    numeric.add
+    store.global $name
+@end
+
+@macro global_set (name, operator, rhs)
+    @matches operator ^-=$
+    load.global $name
+    $rhs
+    numeric.sub
+    store.global $name
+@end
+
+@macro global_set (name, operator, rhs)
+    @matches operator ^\*=$
+    load.global $name
+    $rhs
+    numeric.mul
+    store.global $name
+@end
+
+@macro global_set (name, operator, rhs)
+    @matches operator ^<<=$
+    load.global $name
+    $rhs
+    numeric.shift.left
+    store.global $name
+@end
+
+@macro global_set (name, operator, rhs)
+    @matches operator ^&=$
+    load.global $name
+    $rhs
+    bitwise.and
+    store.global $name
+@end
+
+@macro global_set (name, operator, rhs)
+    @matches operator ^\|=$
+    load.global $name
+    $rhs
+    bitwise.or
+    store.global $name
+@end
+
+@macro global_set (name, operator, rhs)
+    @matches operator ^\^=$
+    load.global $name
+    $rhs
+    bitwise.xor
+    store.global $name
+@end
+
+
+// ## @macro std::int_global_set <name> <operator> <rhs>
+//
+// ### Description
+// Performs Int assignment or compound assignment on an existing global that should
+// be of the Int type.
+//
+// This forwards all of the underlying `std::global_set` operations, and allows for the usage
+// of >>=, %= and /= too.
+//
+// ### Arguments
+// <name>: The existing global name.
+// <operator>: Base `std::set` operators, and >>=, %= or /=.
+// <rhs>: The value to update the global with.
+//
+@macro int_global_set (name, operator, rhs)
+    @matches operator ^(=|\+=|-=|\*=|<<=|&=|\|=|\^=)$
+    !std::global_set $name $operator { $rhs }
+@end
+
+@macro int_global_set (name, operator, rhs)
+    @matches operator ^/=$
+    load.global $name
+    $rhs
+    int.div
+    store.global $name
+@end
+
+@macro int_global_set (name, operator, rhs)
+    @matches operator ^%=$
+    load.global $name
+    $rhs
+    int.mod
+    store.global $name
+@end
+
+@macro int_global_set (name, operator, rhs)
+    @matches operator ^>>=$
+    load.global $name
+    $rhs
+    int.shift.right
+    store.global $name
+@end
+
+// ## @macro std::uint_global_set <name> <operator> <rhs>
+//
+// ### Description
+// Performs UInt assignment or compound assignment on an existing global that should
+// be of the UInt type.
+//
+// This forwards all of the underlying `std::global_set` operations, and allows for the usage
+// of >>=, %= and /= too.
+//
+// ### Arguments
+// <name>: The existing global name.
+// <operator>: Base `std::set` operators, and >>=, %= or /=.
+// <rhs>: The value to update the global with.
+//
+@macro uint_global_set (name, operator, rhs)
+    @matches operator ^(=|\+=|-=|\*=|<<=|&=|\|=|\^=)$
+    !std::global_set $name $operator { $rhs }
+@end
+
+@macro uint_global_set (name, operator, rhs)
+    @matches operator ^/=$
+    load.global $name
+    $rhs
+    uint.div
+    store.global $name
+@end
+
+@macro uint_global_set (name, operator, rhs)
+    @matches operator ^%=$
+    load.global $name
+    $rhs
+    uint.mod
+    store.global $name
+@end
+
+@macro uint_global_set (name, operator, rhs)
+    @matches operator ^>>=$
+    load.global $name
+    $rhs
+    uint.shift.right
+    store.global $name
+@end
+
+// ## @macro std::float_global_set <name> <operator> <rhs>
+//
+// ### Description
+// Performs Float assignment or compound assignment on an existing global that should
+// be of the Float type.
+//
+// This permits for the operations of =, +=, -=, *=, /=, %=, where = is the same
+// underlying `std::global_set` operation.
+//
+// ### Arguments
+// <name>: The existing global name.
+// <operator>: =, +=, -=, *=, /= or %=.
+// <rhs>: The value to update the global with.
+//
+@macro float_global_set (name, operator, rhs)
+    @matches operator ^(=)$
+    !std::global_set $name $operator { $rhs }
+@end
+
+@macro float_global_set (name, operator, rhs)
+    @matches operator ^\+=$
+    load.global $name
+    $rhs
+    float.add
+    store.global $name
+@end
+
+@macro float_global_set (name, operator, rhs)
+    @matches operator ^-=$
+    load.global $name
+    $rhs
+    float.sub
+    store.global $name
+@end
+
+@macro float_global_set (name, operator, rhs)
+    @matches operator ^\*=$
+    load.global $name
+    $rhs
+    float.mul
+    store.global $name
+@end
+
+@macro float_global_set (name, operator, rhs)
+    @matches operator ^/=$
+    load.global $name
+    $rhs
+    float.div
+    store.global $name
+@end
+
+@macro float_global_set (name, operator, rhs)
+    @matches operator ^%=$
+    load.global $name
+    $rhs
+    float.mod
+    store.global $name
+@end
+
+// ## @macro std::swap <lhs> <rhs>
+//
+// ### Description
+// Exchanges two initialised locals of any types.
+//
+// ### Arguments
+// <lhs>: The first local name.
+// <rhs>: The second local name.
+//
+@macro swap (lhs, rhs)
+    load.local $lhs
+    load.local $rhs
+    store.local $lhs
+    store.local $rhs
+@end
+
+// ## @macro std::drop <value>
+//
+// ### Description
+// Evaluates one expression and discards its result.
+//
+// ### Arguments
+// <value>: An expression producing exactly one value.
+//
+@macro drop (value)
+    $value
+    pop
+@end
+
+// ## @macro std::expr <lhs> <operator> <rhs>
+//
+// ### Description
+// Evaluates a generic integer expression using matching Int or UInt operands.
+//
+// Binary operators: +, -, *, <<, &, |, ^, ==, !=.
+//
+// Comparisons leave Boolean. Other operations preserve the input integer type.
+//
+// Use int_expr or uint_expr for /, %, >>, and ordered comparisons.
+//
+// Use float_expr for floating-point arithmetic and comparisons.
+//
+// Use bool_expr for logical operators, tag_expr for Tag equality, and unary for ~.
+//
+// ### Arguments
+// <lhs>: The left expression.
+// <operator>: One of the supported listed binary operator.
+// <rhs>: The right expression.
+//
+@macro expr (lhs, operator, rhs)
+    @matches operator ^\+$
+    $lhs
+    $rhs
+    numeric.add
+@end
+
+@macro expr (lhs, operator, rhs)
+    @matches operator ^-$
+    $lhs
+    $rhs
+    numeric.sub
+@end
+
+@macro expr (lhs, operator, rhs)
+    @matches operator ^\*$
+    $lhs
+    $rhs
+    numeric.mul
+@end
+
+@macro expr (lhs, operator, rhs)
+    @matches operator ^<<$
+    $lhs
+    $rhs
+    numeric.shift.left
+@end
+
+@macro expr (lhs, operator, rhs)
+    @matches operator ^&$
+    $lhs
+    $rhs
+    bitwise.and
+@end
+
+@macro expr (lhs, operator, rhs)
+    @matches operator ^\|$
+    $lhs
+    $rhs
+    bitwise.or
+@end
+
+@macro expr (lhs, operator, rhs)
+    @matches operator ^\^$
+    $lhs
+    $rhs
+    bitwise.xor
+@end
+
+@macro expr (lhs, operator, rhs)
+    @matches operator ^==$
+    $lhs
+    $rhs
+    numeric.equal
+@end
+
+@macro expr (lhs, operator, rhs)
+    @matches operator ^!=$
+    $lhs
+    $rhs
+    numeric.not.equal
+@end
+
+// ## @macro std::int_expr <lhs> <operator> <rhs>
+//
+// ### Description
+// Evaluates Int expressions
+//
+// Both binary operands must be Int.
+//
+// Binary operators: +, -, *, /, %, ==, !=, <, <=, >, >=, <<, >>, &, |, ^. 
+//
+// Use int_unary for unary operators.
+//
+// Comparisons leave Boolean.
+//
+// No implicit conversion occurs.
+//
+//  +, -, *, <<, &, |, ^, ==, != are forwarded from the underlying `std::expr`
+//
+// ### Arguments
+// <lhs>: The left Int expression.
+// <operator>: One of the supported listed binary operator.
+// <rhs>: The right Int expression.
+//
+@macro int_expr (lhs, operator, rhs)
+    @matches operator ^(\+|-|\*|<<|&|\||\^|==|!=)$
+    !std::expr { $lhs } $operator { $rhs }
+@end
+
+@macro int_expr (lhs, operator, rhs)
+    @matches operator ^/$
+    $lhs
+    $rhs
+    int.div
+@end
+
+@macro int_expr (lhs, operator, rhs)
+    @matches operator ^%$
+    $lhs
+    $rhs
+    int.mod
+@end
+
+@macro int_expr (lhs, operator, rhs)
+    @matches operator ^>>$
+    $lhs
+    $rhs
+    int.shift.right
+@end
+
+@macro int_expr (lhs, operator, rhs)
+    @matches operator ^<$
+    $lhs
+    $rhs
+    int.less.than
+@end
+
+@macro int_expr (lhs, operator, rhs)
+    @matches operator ^<=$
+    $lhs
+    $rhs
+    int.less.than.equal
+@end
+
+@macro int_expr (lhs, operator, rhs)
+    @matches operator ^>$
+    $lhs
+    $rhs
+    int.greater.than
+@end
+
+@macro int_expr (lhs, operator, rhs)
+    @matches operator ^>=$
+    $lhs
+    $rhs
+    int.greater.than.equal
+@end
+
+// ## @macro std::uint_expr <lhs> <operator> <rhs>
+//
+// ### Description
+// Evaluates UInt expressions.
+//
+// Both binary operands must be UInt.
+//
+// Binary operators: +, -, *, /, %, ==, !=, <, <=, >, >=, <<, >>, &, |, ^. 
+//
+// Use uint_unary for unary operators.
+//
+// Comparisons leave Boolean.
+//
+// No implicit conversion occurs.
+//
+//  +, -, *, <<, &, |, ^, ==, != are forwarded from the underlying `std::expr`
+//
+// ### Arguments
+// <lhs>: The left UInt expression.
+// <operator>: One of the supported listed binary operator.
+// <rhs>: The right UInt expression.
+//
+@macro uint_expr (lhs, operator, rhs)
+    @matches operator ^(\+|-|\*|<<|&|\||\^|==|!=)$
+    !std::expr { $lhs } $operator { $rhs }
+@end
+
+@macro uint_expr (lhs, operator, rhs)
+    @matches operator ^/$
+    $lhs
+    $rhs
+    uint.div
+@end
+
+@macro uint_expr (lhs, operator, rhs)
+    @matches operator ^%$
+    $lhs
+    $rhs
+    uint.mod
+@end
+
+@macro uint_expr (lhs, operator, rhs)
+    @matches operator ^>>$
+    $lhs
+    $rhs
+    uint.shift.right
+@end
+
+@macro uint_expr (lhs, operator, rhs)
+    @matches operator ^<$
+    $lhs
+    $rhs
+    uint.less.than
+@end
+
+@macro uint_expr (lhs, operator, rhs)
+    @matches operator ^<=$
+    $lhs
+    $rhs
+    uint.less.than.equal
+@end
+
+@macro uint_expr (lhs, operator, rhs)
+    @matches operator ^>$
+    $lhs
+    $rhs
+    uint.greater.than
+@end
+
+@macro uint_expr (lhs, operator, rhs)
+    @matches operator ^>=$
+    $lhs
+    $rhs
+    uint.greater.than.equal
+@end
+
+// ## @macro std::float_expr <lhs> <operator> <rhs>
+//
+// ### Description
+//
+// Evaluates Float expressions.
+// 
+// Binary operators: +, -, *, /, %, ==, !=, <, <=, >, >=. 
+//
+// Use float_unary for unary operators.
+// 
+// Comparisons leave Boolean.
+//
+// No implicit conversion occurs.
+//
+// ### Arguments
+// <lhs>: The left Float expression.
+// <operator>: One of the supported listed binary operator.
+// <rhs>: The right Float expression
+//
+@macro float_expr (lhs, operator, rhs)
+    @matches operator ^\+$
+    $lhs
+    $rhs
+    float.add
+@end
+
+@macro float_expr (lhs, operator, rhs)
+    @matches operator ^-$
+    $lhs
+    $rhs
+    float.sub
+@end
+
+@macro float_expr (lhs, operator, rhs)
+    @matches operator ^\*$
+    $lhs
+    $rhs
+    float.mul
+@end
+
+@macro float_expr (lhs, operator, rhs)
+    @matches operator ^/$
+    $lhs
+    $rhs
+    float.div
+@end
+
+@macro float_expr (lhs, operator, rhs)
+    @matches operator ^%$
+    $lhs
+    $rhs
+    float.mod
+@end
+
+@macro float_expr (lhs, operator, rhs)
+    @matches operator ^==$
+    $lhs
+    $rhs
+    float.equal
+@end
+
+@macro float_expr (lhs, operator, rhs)
+    @matches operator ^!=$
+    $lhs
+    $rhs
+    float.not.equal
+@end
+
+@macro float_expr (lhs, operator, rhs)
+    @matches operator ^<$
+    $lhs
+    $rhs
+    float.less.than
+@end
+
+@macro float_expr (lhs, operator, rhs)
+    @matches operator ^<=$
+    $lhs
+    $rhs
+    float.less.than.equal
+@end
+
+@macro float_expr (lhs, operator, rhs)
+    @matches operator ^>$
+    $lhs
+    $rhs
+    float.greater.than
+@end
+
+@macro float_expr (lhs, operator, rhs)
+    @matches operator ^>=$
+    $lhs
+    $rhs
+    float.greater.than.equal
+@end
+
+// ## @macro std::bool_expr <lhs> <operator> <rhs>
+//
+// ### Description
+// Evaluates a Boolean expression.
+//
+// && evaluates rhs only when lhs is true.
+//
+// || evaluates rhs only when lhs is false.
+//
+// Use bool_unary for Boolean negation.
+//
+// Outputs will always be another boolean.
+//
+// ### Arguments
+// <lhs>: The left Boolean expression.
+// <operator>: && or ||.
+// <rhs>: The right Boolean expression, this is evaluated only when needed!! (short circuit).
+//
+@macro bool_expr (lhs, operator, rhs)
+    @matches operator ^&&$
+    $lhs
+    jump.if.false %false
+    $rhs
+    jump %end
+    %false:
+    push.bool false
+    %end:
+@end
+
+@macro bool_expr (lhs, operator, rhs)
+    @matches operator ^\|\|$
+    $lhs
+    jump.if.true %true
+    $rhs
+    jump %end
+    %true:
+    push.bool true
+    %end:
+@end
+
+// ## @macro std::tag_expr <lhs> <operator> <rhs>
+//
+// ### Description
+// Evaluates a Tag expression.
+//
+// Expression's leave a Boolean result.
+//
+// ### Arguments
+// <lhs>: The left Tag expression.
+// <operator>: == or !=.
+// <rhs>: The right Tag expression.
+//
+@macro tag_expr (lhs, operator, rhs)
+    @matches operator ^==$
+    $lhs
+    $rhs
+    tag.equal
+@end
+
+@macro tag_expr (lhs, operator, rhs)
+    @matches operator ^!=$
+    $lhs
+    $rhs
+    tag.equal
+    bool.not
+@end
+
+// ## @macro std::unary <operator> <value>
+//
+// ### Description
+// Evaluates generic Int/UInt bitwise complement (~) and leaves one value of the same type.
+//
+// Evaluates the operand once. 
+// 
+// Use typed unary operators like int_unary or uint_unary etc. for type-specific unaries.
+//
+// ### Arguments
+// <operator>: The required ~ token.
+// <value>: An Int or UInt expression.
+//
+@macro unary (operator, value)
+    @matches operator ^~$
+    $value
+    bitwise.not
+@end
+
+// ## @macro std::int_unary <operator> <value>
+//
+// ### Description
+// Evaluates a unary Int operation and leaves one Int value.
+//
+// No implicit conversion occurs.
+// Int negation wraps, including INT64_MIN.
+//
+// This forwards the same `~` operator as a normal `std::unary`
+//
+// ### Arguments
+// <operator>: - or ~.
+// <value>: A Int expression.
+//
+@macro int_unary (operator, value)
+    @matches operator ^-$
+    $value
+    int.neg
+@end
+
+@macro int_unary (operator, value)
+    @matches operator ^~$
+    !std::unary $operator { $value }
+@end
+
+// ## @macro std::uint_unary <operator> <value>
+//
+// ### Description
+// Evaluates a unary UInt operation and leaves one UInt value.
+//
+// No implicit conversion occurs.
+//
+// This forwards the same `~` operator as a normal `std::unary`
+//
+// ### Arguments
+// <operator>: ~.
+// <value>: A UInt expression.
+//
+@macro uint_unary (operator, value)
+    @matches operator ^~$
+    !std::unary $operator { $value }
+@end
+
+// ## @macro std::float_unary <operator> <value>
+//
+// ### Description
+// Evaluates a unary Float operation and leaves one Float value.
+//
+// No implicit conversion occurs.
+//
+// ### Arguments
+// <operator>: -.
+// <value>: A Float expression.
+//
+@macro float_unary (operator, value)
+    @matches operator ^-$
+    $value
+    float.neg
+@end
+
+// ## @macro std::bool_unary <operator> <value>
+//
+// ### Description
+// Evaluates a unary Boolean operation and leaves one Boolean value.
+//
+// No implicit conversion occurs.
+//
+// ### Arguments
+// <operator>: !.
+// <value>: A Bool expression.
+//
+@macro bool_unary (operator, value)
+    @matches operator ^!$
+    $value
+    bool.not
+@end
+
+// ## @macro std::choose <condition> ? <yes> : <no>
+//
+// ### Description
+// Evaluates the provided condition block once and evaluates only the selected expression.
+//
+// Leaves the selected value, which may have any type.
+//
+// ### Arguments
+// <condition>: A Boolean expression.
+// <question>: The required ? token.
+// <yes>: The expression evaluated when true.
+// <colon>: The required : token.
+// <no>: The expression evaluated when false.
+//
+@macro choose (condition, question, yes, colon, no)
+    @matches question ^\?$
+    @matches colon ^:$
+    $condition
+    jump.if.false %else
+    $yes
+    jump %end
+    %else:
+    $no
+    %end:
+@end
+
+// ## @macro std::int_truth <value>
+//
+// ### Description
+// Converts an Int value to Boolean by comparing it with zero.
+//
+// Leaves true for nonzero values.
+//
+// ### Arguments
+// <value>: An Int expression, evaluated once.
+//
+@macro int_truth (value)
+    $value
+    push.int 0
+    numeric.not.equal
+@end
+
+// ## @macro std::uint_truth <value>
+//
+// ### Description
+// Converts a UInt value to Boolean by comparing it with zero.
+//
+// Leaves true for nonzero values.
+//
+// ### Arguments
+// <value>: A UInt expression, evaluated once.
+//
+@macro uint_truth (value)
+    $value
+    push.uint 0
+    numeric.not.equal
+@end
+
+// ## @macro std::float_truth <value>
+//
+// ### Description
+// Converts a Float value to Boolean by comparing it with zero (exactly).
+//
+// Leaves true for nonzero values.
+//
+// ### Arguments
+// <value>: A Float expression, evaluated once.
+//
+@macro float_truth (value)
+    $value
+    push.float 0
+    float.not.equal
+@end
+
+// ## @macro std::int_to_float <value>
+//
+// ### Description
+// Explicitly converts one Int value to a Float. 
+// 
+// Large integers may lose precision.
+//
+// ### Arguments
+// <value>: An Int expression, evaluated once.
+//
+@macro int_to_float (value)
+    $value
+    int.to.float
+@end
+
+// ## @macro std::uint_to_float <value>
+//
+// ### Description
+// Explicitly converts one UInt value to a Float. 
+// 
+// Large integers may lose precision.
+//
+// ### Arguments
+// <value>: A UInt expression, evaluated once.
+//
+@macro uint_to_float (value)
+    $value
+    uint.to.float
+@end
+
+// ## @macro std::float_to_int <value>
+//
+// ### Description
+// Explicitly converts one Float value to a Int. 
+//
+// Truncates toward zero.
+//
+// ### Arguments
+// <value>: A Float expression, evaluated once.
+//
+@macro float_to_int (value)
+    $value
+    float.to.int
+@end
+
+// ## @macro std::float_to_uint <value>
+//
+// ### Description
+// Explicitly converts one Float value to a UInt. 
+//
+// Truncates toward zero.
+//
+// ### Arguments
+// <value>: A Float expression, evaluated once.
+//
+@macro float_to_uint (value)
+    $value
+    float.to.uint
+@end
+
+// ## @macro std::int_to_uint <value>
+//
+// ### Description
+// Explicitly converts one Int value to a UInt.
+//
+// Negative values wrap.
+//
+// ### Arguments
+// <value>: A Int expression, evaluated once.
+//
+@macro int_to_uint (value)
+    $value
+    int.to.uint
+@end
+
+// ## @macro std::uint_to_int <value>
+//
+// ### Description
+// Explicitly converts one UInt value to a Int.
+//
+// values above INT64_MAX become negative.
+//
+// ### Arguments
+// <value>: A UInt expression, evaluated once.
+//
+@macro uint_to_int (value)
+    $value
+    uint.to.int
+@end
+
+// ## @macro std::float_is_nan <value>
+//
+// ### Description
+// Leaves a Boolean value indicating whether a Float is NaN.
+//
+// ### Arguments
+// <value>: A Float expression, evaluated once.
+//
+@macro float_is_nan (value)
+    $value
+    float.is.nan
+@end
+
+// ## @macro std::int_step <name> <operator>
+//
+// ### Description
+// Increments or decrements an initialised Int local.
+//
+// Leaves no value. 
+//
+// ### Arguments
+// <name>: The existing Int local's name.
+// <operator>: ++ or --.
+//
+@macro int_step (name, operator)
+    @matches operator ^\+\+$
+    load.local $name
+    push.int 1
+    numeric.add
+    store.local $name
+@end
+
+@macro int_step (name, operator)
+    @matches operator ^--$
+    load.local $name
+    push.int 1
+    numeric.sub
+    store.local $name
+@end
+
+// ## @macro std::uint_step <name> <operator>
+//
+// ### Description
+// Increments or decrements an initialised UInt local.
+//
+// Leaves no value. 
+//
+// ### Arguments
+// <name>: The existing UInt local's name.
+// <operator>: ++ or --.
+//
+@macro uint_step (name, operator)
+    @matches operator ^\+\+$
+    load.local $name
+    push.uint 1
+    numeric.add
+    store.local $name
+@end
+
+@macro uint_step (name, operator)
+    @matches operator ^--$
+    load.local $name
+    push.uint 1
+    numeric.sub
+    store.local $name
+@end
+
+// ## @macro std::call <function> ( <arguments> )
+//
+// ### Description
+// Evaluates arguments once and calls the function. 
+//
+// Leaves the single result, including Unit (guaranteed result)
+//
+// The argument block must leave exactly the number of required arguments for the function, in order.
+//
+// ### Arguments
+// <function>: The function name.
+// <arguments>: A block producing the required arguments for the function called.
+//
+@macro call (function, open, arguments, close)
+    @matches open ^\($
+    @matches close ^\)$
+    $arguments
+    call $function
+@end
+
+// ## @macro std::tailcall <function> ( <arguments> )
+//
+// ### Description
+// Evaluates arguments once and calls the function (similar to `std::call`). 
+//
+// Replaces the current frame and does not return to this call site.
+//
+// The argument block must leave exactly the number of required arguments for the function, in order.
+//
+// ### Arguments
+// <function>: The function name; qualify it from another namespace.
+// <arguments>: A block producing the arguments; use {} for no arguments.
+//
+@macro tailcall (function, open, arguments, close)
+    @matches open ^\($
+    @matches close ^\)$
+    $arguments
+    tail.call $function
+@end
+
+// ## @macro std::return <value>
+//
+// ### Description
+// Returns one expression of any type.
+//
+// Use return_void to return Unit without an argument.
+//
+// ### Arguments
+// <value>: An expression producing the return value.
+//
+@macro return (value)
+    $value
+    return
+@end
+
+// ## @macro std::return_void
+//
+// ### Description
+// Returns Unit.
+//
+// ### Arguments
+// None.
+//
+@macro return_void ()
+    push.unit
+    return
+@end
+
+// ## @macro std::if ( <condition> ) <yes>
+//
+// ### Description
+// Evaluates a Boolean condition once and executes yes only when true.
+// 
+// Does nothing when false and leaves no value. 
+//
+// Use if_else for two branches.
+//
+// ### Arguments
+// <condition>: A Boolean expression.
+// <yes>: A statement block for the true branch.
+//
+@macro if (open, condition, close, yes)
+    @matches open ^\($
+    @matches close ^\)$
+    $condition
+    jump.if.false %end
+    $yes
+    %end:
+@end
+
+// ## @macro std::if_else ( <condition> ) <yes> else <no>
+//
+// ### Description
+// Evaluates a Boolean condition once and executes exactly one statement block.
+//
+// Executes the <yes> block when the condition resolves to Boolean true, otherwise <no>.
+//
+// Leaves no value.
+//
+// ### Arguments
+// <condition>: A Boolean expression.
+// <yes>: A statement block for the true branch.
+// <no>: A statement block for the false branch.
+//
+@macro if_else (open, condition, close, yes, keyword, no)
+    @matches open ^\($
+    @matches close ^\)$
+    @matches keyword ^else$
+    $condition
+    jump.if.false %else
+    $yes
+    jump %end
+    %else:
+    $no
+    %end:
+@end
+
+// ## @macro std::unless ( <condition> ) <body>
+//
+// ### Description
+// Executes body only when the Boolean condition is false. Leaves no value.
+//
+// ### Arguments
+// <condition>: A Boolean expression.
+// <body>: A statement block.
+//
+@macro unless (open, condition, close, body)
+    @matches open ^\($
+    @matches close ^\)$
+    $condition
+    jump.if.true %end
+    $body
+    %end:
+@end
+
+// ## @macro std::while ( <condition> ) <body>
+//
+// ### Description
+// Repeats body while the Boolean condition is true. 
+//
+// Leaves no value.
+//
+// Tests before each iteration.
+//
+// This pushes a new scope during the <body>, which permits for the usage of @continue
+// and @break (as per C-like languages).
+//
+// ### Arguments
+// <condition>: A Boolean expression evaluated before each iteration.
+// <body>: A statement block.
+//
+@macro while (open, condition, close, body)
+    @matches open ^\($
+    @matches close ^\)$
+    %test:
+    $condition
+    jump.if.false %end
+    @scope_push %end %test
+    $body
+    @scope_pop
+    jump %test
+    %end:
+@end
+
+// ## @macro std::do <body> <keyword> ( <condition> )
+//
+// ### Description
+// Executes body before testing the condition. 
+//
+// Leaves no value.
+//
+// while repeats when true, until repeats when false.
+// 
+// This pushes a new scope during the <body>, which permits for the usage of @continue
+// and @break (as per C-like languages).
+//
+// ### Arguments
+// <body>: A statement block.
+// <keyword>: while or until.
+// <condition>: A Boolean expression tested after each iteration.
+//
+@macro do (body, keyword, open, condition, close)
+    @matches keyword ^while$
+    @matches open ^\($
+    @matches close ^\)$
+    %start:
+    @scope_push %end %test
+    $body
+    @scope_pop
+    %test:
+    $condition
+    jump.if.true %start
+    %end:
+@end
+
+@macro do (body, keyword, open, condition, close)
+    @matches keyword ^until$
+    @matches open ^\($
+    @matches close ^\)$
+    %start:
+    @scope_push %end %test
+    $body
+    @scope_pop
+    %test:
+    $condition
+    jump.if.false %start
+    %end:
+@end
+
+// ## @macro std::for ( <init> ; <condition> ; <step> ) <body>
+//
+// ### Description
+// Runs init once, then tests condition before each iteration. 
+// 
+// Leaves no value.
+// 
+// Runs step after body.
+//
+// This pushes a new scope during the <body>, which permits for the usage of @continue
+// and @break (as per C-like languages).
+//
+// ### Arguments
+// <init>: A statement block.
+// <condition>: A Boolean expression.
+// <step>: A statement block.
+// <body>: A statement block.
+//
+@macro for (open, init, init_sep, condition, condition_sep, step, close, body)
+    @matches open ^\($
+    @matches close ^\)$
+    @matches init_sep ^;$
+    @matches condition_sep ^;$
+    $init
+    %test:
+    $condition
+    jump.if.false %end
+    @scope_push %end %step
+    $body
+    @scope_pop
+    %step:
+    $step
+    jump %test
+    %end:
+@end
+
+// ## @macro std::forever <body>
+//
+// ### Description
+// Repeats body indefinitely in a loop.
+//
+// This pushes a new scope during the <body>, which permits for the usage of @continue
+// and @break (as per C-like languages).
+//
+// ### Arguments
+// <body>: A statement block.
+//
+@macro forever (body)
+    %start:
+    @scope_push %end %start
+    $body
+    @scope_pop
+    jump %start
+    %end:
+@end
+
+// ## @macro std::repeat ( <count> ) <body>
+//
+// ### Description
+// Evaluates a UInt count once and runs body that many times.
+//
+// Leaves no value.
+//
+// This pushes a new scope during the <body>, which permits for the usage of @continue
+// and @break (as per C-like languages).
+//
+// ### Arguments
+// <count>: A UInt expression.
+// <body>: A statement block.
+//
+@macro repeat (open, count, close, body)
+    @matches open ^\($
+    @matches close ^\)$
+    @local %limit
+    @local %index
+    $count
+    store.local %limit
+    push.uint 0
+    store.local %index
+    %test:
+    load.local %index
+    load.local %limit
+    uint.less.than
+    jump.if.false %end
+    @scope_push %end %step
+    $body
+    @scope_pop
+    %step:
+    load.local %index
+    push.uint 1
+    numeric.add
+    store.local %index
+    jump %test
+    %end:
+@end
+
+// ## @macro std::foreach ( <item> : <array> ) <body>
+//
+// ### Description
+// Declares item and visits each Array element in order, setting item to that element.
+//
+// Leaves no value.
+//
+// Does not clone the Array.
+//
+// This pushes a new scope during the <body>, which permits for the usage of @continue
+// and @break (as per C-like languages).
+// 
+// Do not modify the Array during iteration, or it will explode.
+//
+// ### Arguments
+// <item>: A new local name receiving each element.
+// <array>: An Array expression.
+// <body>: A statement block.
+//
+@macro foreach (open, item, colon, array, close, body)
+    @matches open ^\($
+    @matches close ^\)$
+    @matches colon ^:$
+    @local $item
+    @local %array
+    @local %limit
+    @local %index
+    $array
+    store.local %array
+    load.local %array
+    array.length
+    store.local %limit
+    push.uint 0
+    store.local %index
+    %test:
+    load.local %index
+    load.local %limit
+    uint.less.than
+    jump.if.false %end
+    load.local %array
+    load.local %index
+    array.nth
+    store.local $item
+    @scope_push %end %step
+    $body
+    @scope_pop
+    %step:
+    load.local %index
+    push.uint 1
+    numeric.add
+    store.local %index
+    jump %test
+    %end:
+@end
+
+// ## @macro std::switch ( <value> ) <cases>
+//
+// ### Description
+// Evaluates value once. This value will be used by subsequent case selectors.
+// 
+// Leaves no value.
+//
+// Runs ordered case blocks where the first matching case exits the switch. 
+// 
+// No fall-through exists here.
+// 
+// A final default is optional.
+//
+// @continue targets an enclosing loop, if present.
+//
+// ### Arguments
+// <value>: An expression to compare with selectors, which must be a `UInt` or `Int`.
+// <cases>: A statement block containing the `std::case`'s.
+//
+@macro switch (open, value, close, cases)
+    @matches open ^\($
+    @matches close ^\)$
+    $value
+    @scope_push %end -
+    $cases
+    pop
+    @scope_pop
+    %end:
+@end
+
+
+// ## @macro std::case <value> : <body>
+//
+// ### Description
+// Compares a switches value using generic Int/UInt equality.
+//
+// Requires matching integer types with the original switches value. 
+// 
+// Runs body on a match and exits the switch.
+//
+// Use as a direct child of switch in the `cases`.
+//
+// `std::case`'s are evaluated in order until a match.
+//
+// ### Arguments
+// <value>: An Int or UInt expression matching the selector type of the switches value.
+// <body>: A statement block, executed on a match.
+//
+@macro case (value, colon, body)
+    @matches colon ^:$
+    duplicate
+    $value
+    numeric.equal
+    jump.if.false %next
+    pop
+    $body
+    @break
+    %next:
+@end
+
+// ## @macro std::default : <body>
+//
+// ### Description
+// Runs body and exits the switch. Leaves no value.
+// Use only as the optional final direct child of switch.
+//
+// ### Arguments
+// <body>: A statement block.
+//
+@macro default (colon, body)
+    @matches colon ^:$
+    pop
+    $body
+    @break
+@end
+
+// ## @macro std::break
+//
+// ### Description
+// Exits the nearest enclosing loop or switch that provides a break target.
+//
+// Valid only inside a scope with the corresponding target.
+//
+// ### Arguments
+// None.
+//
+@macro break ()
+    @break
+@end
+
+// ## @macro std::continue
+//
+// ### Description
+// Jumps to the nearest enclosing loop continue target.
+// 
+// Passes through switches.
+//
+// Valid only inside a scope with the corresponding target.
+//
+// ### Arguments
+// None.
+//
+@macro continue ()
+    @continue
+@end
+
+// ## @macro std::array <count> ( <values> )
+//
+// ### Description
+// Constructs an Array from exactly count values in source order.
+//
+// Leaves the new Array. 
+//
+// Values may have any types.
+//
+// ### Arguments
+// <count>: A UInt literal giving the number of values.
+// <values>: A block producing exactly count values; use {} for an empty array.
+//
+@macro array (count, open, values, close)
+    @matches open ^\($
+    @matches close ^\)$
+    $values
+    push.uint $count
+    array.new
+@end
+
+// ## @macro std::array_length <array>
+//
+// ### Description
+// Leaves the Array length as UInt.
+//
+// ### Arguments
+// <array>: An Array expression.
+//
+@macro array_length (array)
+    $array
+    array.length
+@end
+
+// ## @macro std::array_head <array>
+//
+// ### Description
+// Leaves the first element of a nonempty Array.
+//
+// ### Arguments
+// <array>: An Array expression.
+//
+@macro array_head (array)
+    $array
+    array.head
+@end
+
+// ## @macro std::array_tail <array>
+//
+// ### Description
+// Leaves a new Array excluding the first element of a nonempty Array.
+//
+// ### Arguments
+// <array>: An Array expression.
+//
+@macro array_tail (array)
+    $array
+    array.tail
+@end
+
+// ## @macro std::array_get <array> [ <index> ]
+//
+// ### Description
+// Reads an Array element and leaves its value.
+//
+// The index must be in bounds.
+//
+// ### Arguments
+// <array>: An Array expression.
+// <index>: A UInt expression.
+//
+@macro array_get (array, open, index, close)
+    @matches open ^\[$
+    @matches close ^\]$
+    $array
+    $index
+    array.nth
+@end
+
+// ## @macro std::array_set <array> [ <index> ] = <rhs>
+//
+// ### Description
+// Updates an Array element in place and leaves no value.
+//
+// The index must be in bounds.
+//
+// ### Arguments
+// <array>: An Array expression.
+// <index>: A UInt expression.
+// <rhs>: An expression producing any value.
+//
+@macro array_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^=$
+    $array
+    $index
+    $rhs
+    array.set
+    pop
+@end
+
+// ## @macro std::array_append <lhs> <rhs>
+//
+// ### Description
+// Leaves a new Array containing lhs followed by rhs.
+//
+// Evaluates each Array expression once, left to right.
+//
+// ### Arguments
+// <lhs>: The first Array expression.
+// <rhs>: The second Array expression.
+//
+@macro array_append (lhs, rhs)
+    $lhs
+    $rhs
+    array.append
+@end
+
+// ## @macro std::array_prepend <array> <value>
+//
+// ### Description
+// Leaves a new Array with value at index zero followed by the original elements.
+//
+// ### Arguments
+// <array>: An Array expression.
+// <value>: An expression producing any value.
+//
+@macro array_prepend (array, value)
+    $array
+    $value
+    array.cons
+@end
+
+// ## @macro std::object_new <type> ( <fields> )
+//
+// ### Description
+// Constructs an Object and leaves its value.
+//
+// The field block must produce exactly the declared field count, in declaration order.
+//
+// ### Arguments
+// <type>: The declared object type's name.
+// <fields>: A block producing field values; use {} for no fields.
+//
+@macro object_new (type, open, fields, close)
+    @matches open ^\($
+    @matches close ^\)$
+    $fields
+    object.new $type
+@end
+
+// ## @macro std::object_get <object> -> <field>
+//
+// ### Description
+// Evaluates object once and leaves the named field value.
+//
+// This uses the Boson3 named-field shorthand.
+//
+// ### Arguments
+// <object>: An Object expression.
+// <field>: The field in the form of object.field.
+//
+@macro object_get (object, arrow, field)
+    @matches arrow ^->$
+    $object
+    object.get $field
+@end
+
+// ## @macro std::object_set <object> -> <field> = <rhs>
+//
+// ### Description
+// Mutates the named field in the object and leaves no value.
+//
+// ### Arguments
+// <object>: An Object expression.
+// <arrow>: The required -> token.
+// <field>: The field in the form of object.field.
+// <rhs>: An expression producing any value.
+//
+@macro object_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^=$
+    $object
+    $rhs
+    object.set $field
+    pop
+@end
+
+// ## @macro std::clone <value>
+//
+// ### Description
+// Leaves a shallow clone of one value of any type.
+//
+// ### Arguments
+// <value>: An expression producing any value.
+//
+@macro clone (value)
+    $value
+    clone
+    swap
+    pop
+@end
+
+// ## @macro std::type <value>
+//
+// ### Description
+// Leaves the type Tag of any value.
+//
+// ### Arguments
+// <value>: An expression producing any value.
+//
+@macro type (value)
+    $value
+    type.of
+    swap
+    pop
+@end
+
+// ## @macro std::assert ( <condition> )
+//
+// ### Description
+// Aborts execution unless condition is Boolean true.
+//
+// Always enabled.
+//
+// ### Arguments
+// <condition>: A Boolean expression evaluated once.
+//
+@macro assert (open, condition, close)
+    @matches open ^\($
+    @matches close ^\)$
+    $condition
+    jump.if.true %ok
+    abort
+    %ok:
+@end
+
+// ## @fn std::int_min <a> <b>
+//
+// ### Description
+// Returns the smaller of two Int values.
+//
+// ### Arguments
+// <a>: The first Int value.
+// <b>: The second Int value.
+//
+@fn int_min (a, b)
+    load.local a
+    load.local b
+    int.less.than.equal
+    jump.if.false take_b
+    load.local a
+    return
+take_b:
+    load.local b
+    return
+
+// ## @fn std::int_max <a> <b>
+//
+// ### Description
+// Returns the larger of two Int values.
+//
+// ### Arguments
+// <a>: The first Int value.
+// <b>: The second Int value.
+//
+@fn int_max (a, b)
+    load.local a
+    load.local b
+    int.greater.than.equal
+    jump.if.false take_b
+    load.local a
+    return
+take_b:
+    load.local b
+    return
+
+// ## @fn std::int_clamp <value> <lower> <upper>
+//
+// ### Description
+// Clamps an Int to inclusive bounds.
+//
+// ### Arguments
+// <value>: The Int to clamp.
+// <lower>: The Int lower bound.
+// <upper>: The Int upper bound.
+//
+@fn int_clamp (value, lower, upper)
+    load.local lower
+    load.local upper
+    int.less.than.equal
+    jump.if.true bounds_ok
+    abort
+bounds_ok:
+    load.local value
+    load.local lower
+    int.less.than
+    jump.if.true take_lower
+    load.local value
+    load.local upper
+    int.greater.than
+    jump.if.true take_upper
+    load.local value
+    return
+take_lower:
+    load.local lower
+    return
+take_upper:
+    load.local upper
+    return
+
+// ## @fn std::uint_min <a> <b>
+//
+// ### Description
+// Returns the smaller of two UInt values.
+//
+// ### Arguments
+// <a>: The first UInt value.
+// <b>: The second UInt value.
+//
+@fn uint_min (a, b)
+    load.local a
+    load.local b
+    uint.less.than.equal
+    jump.if.false take_b
+    load.local a
+    return
+take_b:
+    load.local b
+    return
+
+// ## @fn std::uint_max <a> <b>
+//
+// ### Description
+// Returns the larger of two UInt values.
+//
+// ### Arguments
+// <a>: The first UInt value.
+// <b>: The second UInt value.
+//
+@fn uint_max (a, b)
+    load.local a
+    load.local b
+    uint.greater.than.equal
+    jump.if.false take_b
+    load.local a
+    return
+take_b:
+    load.local b
+    return
+
+// ## @fn std::uint_clamp <value> <lower> <upper>
+//
+// ### Description
+// Clamps a UInt to inclusive bounds.
+//
+// ### Arguments
+// <value>: The UInt to clamp.
+// <lower>: The UInt lower bound.
+// <upper>: The UInt upper bound.
+//
+@fn uint_clamp (value, lower, upper)
+    load.local lower
+    load.local upper
+    uint.less.than.equal
+    jump.if.true bounds_ok
+    abort
+bounds_ok:
+    load.local value
+    load.local lower
+    uint.less.than
+    jump.if.true take_lower
+    load.local value
+    load.local upper
+    uint.greater.than
+    jump.if.true take_upper
+    load.local value
+    return
+take_lower:
+    load.local lower
+    return
+take_upper:
+    load.local upper
+    return
+
+// ## @fn std::int_abs <value>
+//
+// ### Description
+// Returns the absolute value of an Int. 
+//
+// This function will abort if the value is not representable (equal to -9223372036854775808)
+//
+// ### Arguments
+// <value>: The Int value.
+//
+@fn int_abs (value)
+    load.local value
+    push.int -9223372036854775808
+    numeric.equal
+    jump.if.false representable
+    abort
+representable:
+    load.local value
+    push.int 0
+    int.less.than
+    jump.if.false nonnegative
+    load.local value
+    int.neg
+    return
+nonnegative:
+    load.local value
+    return
