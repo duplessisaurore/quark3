@@ -19,6 +19,7 @@ pub mod macro_scope_processor;
 pub mod preprocessor;
 
 use clap::Parser;
+use regex::Regex;
 use std::{fs, path::PathBuf, process};
 
 use crate::{macro_scope_processor::MacroScopeExpander, preprocessor::BosonLowerer};
@@ -61,6 +62,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         eprintln!("error reading {}: {e}", input_path.display());
         process::exit(1);
     });
+
+    // this dumb macro is dumb but it should allow us to use multiple macros in one line.
+    let dumb_macro_newline_regex =
+        Regex::new(r"!([^\s]+::[^\s]+)").expect("expects static dumb macro to just work");
+
+    let source = dumb_macro_newline_regex
+        .replace_all(&source, "\n!$1")
+        .to_string();
 
     // Expand macros in input source
     let expander = MacroScopeExpander::new(&source, macro_passes_limit, macro_expansion_limit);

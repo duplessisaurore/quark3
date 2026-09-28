@@ -480,7 +480,8 @@ impl<'source> MacroScopeExpander<'source> {
             let rest = borrowed[1..].iter().map(|tok| tok.to_string()).collect();
 
             // Parse all of the arguments to this macro
-            let mut cursor = ArgCursor::new(&mut lines, line.origin.clone(), rest);
+            let cursor_origin = line.origin.through(name);
+            let mut cursor = ArgCursor::new(&mut lines, cursor_origin, rest);
             let args = cursor.parse_args(macro_argc, name)?;
 
             // Expand the actual macro
@@ -843,7 +844,7 @@ impl<'a> ArgCursor<'a> {
                         expected: arg_count as u64,
                         got: args.len() as u64,
                     }
-                    .with_line(self.origin.line_usize()));
+                    .with_origin(self.origin.clone()));
                 }
 
                 // A raw directive can only appear inside a block argument.
@@ -851,7 +852,7 @@ impl<'a> ArgCursor<'a> {
                     return Err(LoweringErrorKind::RawDirectiveAsArgument {
                         name: name.to_string(),
                     }
-                    .with_line(self.origin.line_usize()));
+                    .with_origin(self.origin.clone()));
                 }
 
                 // A block, otherwise a normal token.
@@ -863,7 +864,7 @@ impl<'a> ArgCursor<'a> {
                             expected: format!("an argument to !{name}"),
                             got: "}".to_string(),
                         }
-                        .with_line(self.origin.line_usize()));
+                        .with_origin(self.origin.clone()));
                     }
 
                     _ => args.push(MacroArg::Token(token)),
@@ -876,7 +877,7 @@ impl<'a> ArgCursor<'a> {
             return Err(LoweringErrorKind::MacroInvocationLeftoverTokens {
                 name: name.to_string(),
             }
-            .with_line(self.origin.line_usize()));
+            .with_origin(self.origin.clone()));
         }
 
         Ok(args)
@@ -918,7 +919,7 @@ impl<'a> ArgCursor<'a> {
                     return Err(LoweringErrorKind::UnterminatedBlock {
                         name: name.to_string(),
                     }
-                    .with_line(self.origin.line_usize()));
+                    .with_origin(self.origin.clone()));
                 }
 
                 Chunk::Token(token) => match token.as_str() {

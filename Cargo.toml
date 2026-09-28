@@ -27,6 +27,7 @@ quark_debug = { workspace = true }
 [workspace.dependencies]
 hashbrown = "0.17.1"
 lepton3 = { git = "https://github.com/duplessisaurore/lepton3" }
+regex = "1.13.1"
 
 quark_map = { path = "./crates/quark_map" }
 quark_asm = { path = "./crates/quark_asm" }

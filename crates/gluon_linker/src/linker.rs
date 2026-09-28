@@ -235,6 +235,12 @@ impl Linker {
         let object_map = &remap_maps.object_map;
         let macro_map = &remap_maps.macro_map;
 
+        let file_namespace = &file
+            .namespace
+            .as_ref()
+            .expect("expected namespace to already have been gathered for file")
+            .0;
+
         // The pass, remap all instructions now with names
         for (line_number, line) in file.file_contents.lines().enumerate() {
             let line_number = line_number + 1;
@@ -247,7 +253,12 @@ impl Linker {
                 continue;
             }
 
-            let blocked_line = line.replace("{", "\n{\n").replace("}", "\n}");
+            let blocked_line = line
+                .replace("{", "\n{\n")
+                .replace("}", "\n}")
+                .replace("self::", &format!("{file_namespace}::"));
+
+
             for line in blocked_line.lines() {
                 let tokens: Vec<&str> = line.split_whitespace().collect();
 
