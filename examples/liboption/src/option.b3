@@ -11,17 +11,26 @@
 @object Some (item)
 @object None ()
 
-// ## @fn std::option::new_some
+// ## @fn std::option::new_some <item>
+//
+// ### Description
 // Create a new option object with Some
+//
+// ### Arguments:
+// <item>: The item to be contained in Some(<item>)
 @fn new_some (item)
-    !std::return { 
-        !std::object_new self::Some ( { !std::get item } )
+    !std::return {
+        !std::object_new self::Some ( { 
+            !std::get item 
+        } )
     }
 
 // ## @fn std::option::new_some
+//
+// ### Description
 // Create a new option object with None
-@fn new_none (item)
-    !std::return { 
+@fn new_none ()
+    !std::return {
         !std::object_new self::None ( { } )
     }
 
@@ -70,16 +79,22 @@
 %after:
 @end
 
-// ## @macro std::option::unwrap <option>
+// ## @fn std::option::unwrap <option>
 //
+// ### Description
 // Unwraps the option out into the `item` value, or aborts
 // execution and panics
-@macro unwrap (option)
-    !self::match { !std::get option }
-        Some ( item ) => {
-            !std::get item
-        }
-        None => {
-            abort
-        }
-@end
+//
+// ### Arguments
+// <option>: The option to unwrap
+@fn unwrap (option)
+    !std::return {
+        !self::match { !std::get option }
+            Some ( item ) => {
+                !std::get item
+            }
+            None => {
+                abort
+            }
+    }
+    

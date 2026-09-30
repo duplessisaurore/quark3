@@ -1,0 +1,6 @@
+name = "libqueue"
+files = [
+    "src/*",
+    "../liboption/src/option.b3",
+    "../libstd/src/*"
+]

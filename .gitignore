@@ -30,6 +30,7 @@ rustc-ice-*.txt
 **/build/*.linked.boson3
 **/build/*.quark3
 **/build/*.lepton3
+**/build/*.map
 
 # Built Visual Studio Code Extensions
 *.vsix

@@ -1,0 +1,37 @@
+@namespace test
+
+@requires std::option
+@requires std
+
+@entry main
+
+@fn main ()
+    !std::let some_option = { !std::call std::option::new_some ( { !std::bool true } ) }
+    !std::let none_option = { !std::call std::option::new_none ( { } ) }
+    
+    !std::assert ( {
+        !std::option::match { !std::get some_option }
+            Some ( hello_string ) => {
+                !std::get hello_string
+            }
+            None => {
+                !std::bool false
+            }
+    } )
+
+    !std::assert ( {
+        !std::option::match { !std::get none_option }
+            Some ( invalid ) => {
+                !std::bool false
+            }
+            None => {
+                !std::bool true
+            }
+    } )
+
+    !std::assert ( {
+        !std::object_method { !std::get some_option } -> std::option::unwrap ( {} )
+    })
+
+
+    !std::return_void
