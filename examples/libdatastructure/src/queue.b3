@@ -1,0 +1,42 @@
+// queue.b3
+//
+// This contains an `Array`-backed queue implementation
+// with runtime validation that types match the expected type
+
+@namespace std::queue
+
+@requires std
+
+/// Queue (items: array)
+@object Queue (items)
+
+// ## @fn std::queue::new
+//
+// Returns a new empty queue with no values inside. (std::queue::Queue)
+@fn new ()
+    !std::object_new self::Queue ( {
+        !std::array 0 ( {} )
+    } )
+
+// ## @method Queue.std::queue::length
+//
+// Returns the length of the elements in the queue (UInt)
+@fn length (queue)
+    !std::return {
+        !std::array_length { !std::get queue }
+    }
+
+// ## @method Queue.std::queue::empty
+//
+// Returns whether or not the queue is empty (UInt)
+@fn empty (queue)
+    !std::let length = { !std::object_method queue -> self::length ( {} ) }
+    !std::return {
+        !std::uint_expr { !std::get length } == { !std::uint 0 }
+    }
+
+// ## @method Queue.std::queue::peek
+//
+// Returns the front of the queue without popping from the queue (Any)
+// 
+@fn peek (queue)

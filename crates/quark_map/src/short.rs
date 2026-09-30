@@ -12,6 +12,7 @@ map_opcode! {
     "dup" = Opcode::Duplicate,
     "pop" = Opcode::Pop,
     "swp" = Opcode::Swap,
+    "rot" = Opcode::Rotate,
     "nad" = Opcode::Add,
     "nsb" = Opcode::Sub,
     "nml" = Opcode::Mul,

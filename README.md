@@ -212,6 +212,7 @@ There are two available forms:
 | duplicate | dup | Duplicate |
 | pop | pop | Pop |
 | swap | swp | Swap |
+| rotate | rot | Rotate |
 
 For the `PushInt`/`PushUInt`/`PushFloat`/`PushBool` instructions, the operand is inlined as follows:
 

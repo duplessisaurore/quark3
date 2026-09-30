@@ -1967,6 +1967,47 @@
     object.get $field
 @end
 
+// ## @macro std::object_method <object> -> <method> ( <arguments> )
+//
+// ### Description
+// Calls a method (function) which takes the object as the first argument,
+// and passes the remaining arguments in.
+//
+// ### Arguments
+// <object>: An Object expression.
+// <method>: The name of the method (same as call)
+// <arguments>: Non-object arguments to the function, same as call.
+//
+@macro object_method (object, arrow, method, open, arguments, close)
+    @matches arrow ^->$
+    @matches open ^\($
+    @matches close ^\)$
+    $object
+    $arguments
+    call $method
+@end
+
+// ## @macro std::object_tailmethod <object> -> <method> ( <arguments> )
+//
+// ### Description
+// Tail calls a method (function) which takes the object as the first argument,
+// and passes the remaining arguments in.
+//
+// ### Arguments
+// <object>: An Object expression.
+// <method>: The name of the method (same as tail call)
+// <arguments>: Non-object arguments to the function, same as tail call.
+//
+@macro object_tailmethod (object, arrow, method, open, arguments, close)
+    @matches arrow ^->$
+    @matches open ^\($
+    @matches close ^\)$
+    $object
+    $arguments
+    tail.call $method
+@end
+
+
 // ## @macro std::object_set <object> -> <field> = <rhs>
 //
 // ### Description
