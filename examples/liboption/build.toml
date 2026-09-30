@@ -1,0 +1,5 @@
+name = "liboption"
+files = [
+    "src/*",
+    "../libstd/src/*"
+]

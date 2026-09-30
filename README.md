@@ -359,7 +359,7 @@ go_return:
 | object.length | oln | ObjectLength |
 | object.type.tag | ott | ObjectTypeTag |
 
-For the `ObjectNew` instruction, the object is not referred to by its index, but by the sugared \<name> defined by the `@object` directive. This is inlined with the opcode as follows:
+For the `ObjectNew` instruction and `ObjectTypeTag`, the object is not referred to by its index, but by the sugared \<name> defined by the `@object` directive. This is inlined with the opcode as follows:
 
 ```
 // Defines the object type
@@ -367,6 +367,9 @@ For the `ObjectNew` instruction, the object is not referred to by its index, but
 
 // Create a new object of the type "Nothing"
 object.new Nothing
+
+// Get the object type of the type "Nothing"
+object.type.tag Nothing
 ```
 
 ### Tagged Values

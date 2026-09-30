@@ -1,0 +1,85 @@
+// option.b3
+//
+// This contains an `Option` type that can be
+// empty None or Some(Any)
+
+@namespace std::option
+
+@requires std
+
+// The two variants of option
+@object Some (item)
+@object None ()
+
+// ## @fn std::option::new_some
+// Create a new option object with Some
+@fn new_some (item)
+    !std::return { 
+        !std::object_new self::Some ( { !std::get item } )
+    }
+
+// ## @fn std::option::new_some
+// Create a new option object with None
+@fn new_none (item)
+    !std::return { 
+        !std::object_new self::None ( { } )
+    }
+
+// ## @macro std::option::match <option> Some ( <item_name> ) => <some_body> None => <none_body>
+// 
+// ### Description
+// Creates a "match" statement that handles effectively the some/none cases
+// of an option object.
+//
+// If an object is the same as a Some-type object, then the item inside the Some
+// will be bound locally with the name <item_name> and then the body ran.
+//
+// Any other kind of item will run the none body
+//
+// ### Arguments
+// <option>: The option object we are matching on
+// <item_name>: The name to bind the Some-case locally to on the case that option is Some.
+// <some_body>: The body that will be ran in the some case.
+// <none_body>: The body that will be ran in every other case.
+@macro match (option, some, open, item_binding, close, =>, some_body, none, none_arrow, none_body)
+    @matches some ^Some$
+    @matches open ^\($
+    @matches close ^\)$
+    @matches => ^=>$
+    @matches none ^None$
+    @matches none_arrow ^=>$
+    object.type.tag self::Some
+    $option
+    type.of
+    rotate
+
+    tag.equal
+    jump.if.false %none_match
+    
+%some_match:
+    @local $item_binding
+    object.get Some.item
+    store.local $item_binding
+    $some_body
+    jump %after
+
+%none_match:
+    pop
+    $none_body
+
+%after:
+@end
+
+// ## @macro std::option::unwrap <option>
+//
+// Unwraps the option out into the `item` value, or aborts
+// execution and panics
+@macro unwrap (option)
+    !self::match { !std::get option }
+        Some ( item ) => {
+            !std::get item
+        }
+        None => {
+            abort
+        }
+@end

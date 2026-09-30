@@ -1,4 +1,0 @@
-name = "libdatastructure"
-files = [
-    "src/*"
-]

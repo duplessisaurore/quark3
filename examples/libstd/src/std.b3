@@ -962,9 +962,9 @@
     jump.if.false %false
     $rhs
     jump %end
-    %false:
+%false:
     push.bool false
-    %end:
+%end:
 @end
 
 @macro bool_expr (lhs, operator, rhs)
@@ -973,9 +973,9 @@
     jump.if.true %true
     $rhs
     jump %end
-    %true:
+%true:
     push.bool true
-    %end:
+%end:
 @end
 
 // ## @macro std::tag_expr <lhs> <operator> <rhs>
@@ -1122,9 +1122,9 @@
     jump.if.false %else
     $yes
     jump %end
-    %else:
+%else:
     $no
-    %end:
+%end:
 @end
 
 // ## @macro std::int_truth <value>
@@ -1419,7 +1419,7 @@
     $condition
     jump.if.false %end
     $yes
-    %end:
+%end:
 @end
 
 // ## @macro std::if_else ( <condition> ) <yes> else <no>
@@ -1444,9 +1444,9 @@
     jump.if.false %else
     $yes
     jump %end
-    %else:
+%else:
     $no
-    %end:
+%end:
 @end
 
 // ## @macro std::unless ( <condition> ) <body>
@@ -1464,7 +1464,7 @@
     $condition
     jump.if.true %end
     $body
-    %end:
+%end:
 @end
 
 // ## @macro std::while ( <condition> ) <body>
@@ -1486,14 +1486,14 @@
 @macro while (open, condition, close, body)
     @matches open ^\($
     @matches close ^\)$
-    %test:
+%test:
     $condition
     jump.if.false %end
     @scope_push %end %test
     $body
     @scope_pop
     jump %test
-    %end:
+%end:
 @end
 
 // ## @macro std::do <body> <keyword> ( <condition> )
@@ -1517,28 +1517,28 @@
     @matches keyword ^while$
     @matches open ^\($
     @matches close ^\)$
-    %start:
+%start:
     @scope_push %end %test
     $body
     @scope_pop
-    %test:
+%test:
     $condition
     jump.if.true %start
-    %end:
+%end:
 @end
 
 @macro do (body, keyword, open, condition, close)
     @matches keyword ^until$
     @matches open ^\($
     @matches close ^\)$
-    %start:
+%start:
     @scope_push %end %test
     $body
     @scope_pop
-    %test:
+%test:
     $condition
     jump.if.false %start
-    %end:
+%end:
 @end
 
 // ## @macro std::for ( <init> ; <condition> ; <step> ) <body>
@@ -1565,16 +1565,16 @@
     @matches init_sep ^;$
     @matches condition_sep ^;$
     $init
-    %test:
+%test:
     $condition
     jump.if.false %end
     @scope_push %end %step
     $body
     @scope_pop
-    %step:
+%step:
     $step
     jump %test
-    %end:
+%end:
 @end
 
 // ## @macro std::forever <body>
@@ -1589,12 +1589,12 @@
 // <body>: A statement block.
 //
 @macro forever (body)
-    %start:
+%start:
     @scope_push %end %start
     $body
     @scope_pop
     jump %start
-    %end:
+%end:
 @end
 
 // ## @macro std::repeat ( <count> ) <body>
@@ -1620,7 +1620,7 @@
     store.local %limit
     push.uint 0
     store.local %index
-    %test:
+%test:
     load.local %index
     load.local %limit
     uint.less.than
@@ -1628,13 +1628,13 @@
     @scope_push %end %step
     $body
     @scope_pop
-    %step:
+%step:
     load.local %index
     push.uint 1
     numeric.add
     store.local %index
     jump %test
-    %end:
+%end:
 @end
 
 // ## @macro std::foreach ( <item> : <array> ) <body>
@@ -1671,7 +1671,7 @@
     store.local %limit
     push.uint 0
     store.local %index
-    %test:
+%test:
     load.local %index
     load.local %limit
     uint.less.than
@@ -1683,13 +1683,13 @@
     @scope_push %end %step
     $body
     @scope_pop
-    %step:
+%step:
     load.local %index
     push.uint 1
     numeric.add
     store.local %index
     jump %test
-    %end:
+%end:
 @end
 
 // ## @macro std::switch ( <value> ) <cases>
@@ -1719,7 +1719,7 @@
     $cases
     pop
     @scope_pop
-    %end:
+%end:
 @end
 
 
@@ -1749,7 +1749,7 @@
     pop
     $body
     @break
-    %next:
+%next:
 @end
 
 // ## @macro std::default : <body>
@@ -2074,7 +2074,7 @@
     $condition
     jump.if.true %ok
     abort
-    %ok:
+%ok:
 @end
 
 // ## @fn std::int_min <a> <b>

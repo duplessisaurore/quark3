@@ -26,5 +26,10 @@ rustc-ice-*.txt
 !.vscode/*.code-snippets
 !*.code-workspace
 
+# Boson3
+**/build/*.linked.boson3
+**/build/*.quark3
+**/build/*.lepton3
+
 # Built Visual Studio Code Extensions
 *.vsix
