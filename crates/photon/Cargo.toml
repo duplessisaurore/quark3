@@ -1,0 +1,18 @@
+[package]
+name = "photon"
+version = "1.0.0"
+edition = "2024"
+authors = ["The Quark3 Contributors"]
+
+description = "A sugar layer using the `std.b3` boson3 macro library for actual usable programming capabilities"
+readme = "README.md"
+
+repository = "https://github.com/duplessisaurore/quark3"
+license = "AGPLv3"
+
+keywords = ["languages", "scripting", "script"]
+
+[dependencies]
+
+# Argument parsing helper
+clap = { version = "4.5", features = ["derive", "wrap_help"] }

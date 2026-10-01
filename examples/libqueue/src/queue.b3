@@ -81,14 +81,14 @@
 // ## @fn std::queue::front_ref <queue>
 //
 // ### Description
-// Returns the front of the queue without popping it off
+// Returns a copy of the front of the queue without popping it off
 //
 // ### Arguments
 // <queue>: The queue to get the item from
 //
 // ### Returns
 // an liboption Option of the item potentially
-@fn front_ref (queue)
+@fn peek (queue)
     !std::let queue_array = { !std::object_get { !std::get queue } -> self::Queue.array }
     
     // if object is empty, return None

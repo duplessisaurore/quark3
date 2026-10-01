@@ -41,6 +41,9 @@ pub enum LinkerErrorKind {
         namespace: String,
         file_requires: String,
     },
+
+    /// Invalid source location due to invalid arguments
+    InvalidSourceLocationDirective { reason: &'static str },
 }
 
 /// A namespace, essentially just a string for
@@ -219,6 +222,22 @@ impl Linker {
         let mut output = Vec::new();
         let mut errors = Vec::new();
 
+        // Find whether or not this file contains the @source_loc directive, which
+        // means the automatic linker loc's wont be inserted and instead based off the @source_loc's.
+        let has_source_locs = file.file_contents.lines().any(|line| {
+            matches!(
+                strip_comment(line)
+                    .trim()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                ["@source_loc", _, _]
+            )
+        });
+
+        // The index of this file into the files table, which we use for @loc's
+        let file_index = get_file_idx(loc_maps, &file.full_file_name);
+
         // The current parameters of the macro body we are walking if any,
         // we need to NOT remap macro params inserted in-line and stuff so this is for that!
         let mut macro_params: Option<Vec<String>> = None;
@@ -258,11 +277,41 @@ impl Linker {
                 .replace("}", "\n}")
                 .replace("self::", &format!("{file_namespace}::"));
 
-
             for line in blocked_line.lines() {
                 let tokens: Vec<&str> = line.split_whitespace().collect();
 
                 match tokens.as_slice() {
+                    // This is a special loc marker emitted by higher layers
+                    // which we translate down into real-loc's for this file
+                    ["@source_loc", source_line, source_col] => {
+                        let source_line = match source_line.parse::<usize>().map_err(|_| {
+                            LinkerErrorKind::InvalidSourceLocationDirective {
+                                reason: "invalid line",
+                            }
+                            .with_line(line_number, file.full_file_name.clone())
+                        }) {
+                            Ok(line) => line,
+                            Err(error) => {
+                                errors.push(error);
+                                continue;
+                            }
+                        };
+                        let source_col = match source_col.parse::<usize>().map_err(|_| {
+                            LinkerErrorKind::InvalidSourceLocationDirective {
+                                reason: "invalid column",
+                            }
+                            .with_line(line_number, file.full_file_name.clone())
+                        }) {
+                            Ok(col) => col,
+                            Err(error) => {
+                                errors.push(error);
+                                continue;
+                            }
+                        };
+
+                        output.push(format!("@loc {file_index} {source_line} {source_col}"));
+                    }
+
                     // @macro <name> (<param>, ...) opens a macro body,
                     // we should be careful to not replace any of the params with remapped things
                     ["@macro", _, params @ ..] => {
@@ -314,11 +363,12 @@ impl Linker {
                             }
                         };
 
-                        push_out(
-                            get_file_idx(loc_maps, &file.full_file_name),
+                        push_source_aware(
+                            file_index,
                             format!("{op} {new_global_name}"),
                             line_number,
                             &mut output,
+                            has_source_locs,
                         );
                     }
 
@@ -349,11 +399,12 @@ impl Linker {
                             }
                         };
 
-                        push_out(
-                            get_file_idx(loc_maps, &file.full_file_name),
+                        push_source_aware(
+                            file_index,
                             format!("{op} {new_object_name}"),
                             line_number,
                             &mut output,
+                            has_source_locs,
                         );
                     }
 
@@ -395,11 +446,12 @@ impl Linker {
                             }
                         };
 
-                        push_out(
-                            get_file_idx(loc_maps, &file.full_file_name),
+                        push_source_aware(
+                            file_index,
                             format!("{op} {new_object_name}.{field}"),
                             line_number,
                             &mut output,
+                            has_source_locs,
                         );
                     }
 
@@ -430,11 +482,12 @@ impl Linker {
                             }
                         };
 
-                        push_out(
-                            get_file_idx(loc_maps, &file.full_file_name),
+                        push_source_aware(
+                            file_index,
                             format!("{op} {new_function_name}"),
                             line_number,
                             &mut output,
+                            has_source_locs,
                         );
                     }
 
@@ -466,11 +519,12 @@ impl Linker {
                                 }
                             };
 
-                        push_out(
-                            get_file_idx(loc_maps, &file.full_file_name),
+                        push_source_aware(
+                            file_index,
                             format!("{op} {new_capability_name}"),
                             line_number,
                             &mut output,
+                            has_source_locs,
                         );
                     }
 
@@ -501,11 +555,12 @@ impl Linker {
                         let mut rebuilt = vec![format!("!{new_macro_name}")];
                         rebuilt.extend(args.iter().map(|token| token.to_string()));
 
-                        push_out(
-                            get_file_idx(loc_maps, &file.full_file_name),
+                        push_source_aware(
+                            file_index,
                             rebuilt.join(" "),
                             line_number,
                             &mut output,
+                            has_source_locs,
                         );
                     }
 
@@ -515,11 +570,12 @@ impl Linker {
                     }
 
                     // Non-remappable things
-                    other => push_out(
-                        get_file_idx(loc_maps, &file.full_file_name),
+                    other => push_source_aware(
+                        file_index,
                         other.join(" "),
                         line_number,
                         &mut output,
+                        has_source_locs
                     ),
                 }
             }
@@ -927,6 +983,12 @@ impl Display for LinkerErrorKind {
                     "The file `{file_requires}` @requires the namespace `{namespace}` but it was not found"
                 )
             }
+            Self::InvalidSourceLocationDirective { reason } => {
+                write!(
+                    f,
+                    "A source location directive @source_loc was found to be invalid: `{reason}`!"
+                )
+            }
         }
     }
 }
@@ -949,6 +1011,28 @@ fn insert_loc(file_idx: usize, line_number: usize, output: &mut Vec<String>) {
 fn push_out(file_idx: usize, contents: String, line_number: usize, output: &mut Vec<String>) {
     insert_loc(file_idx, line_number, output);
     output.push(contents);
+}
+
+// Emit an instruction after remapping while respecting any @source_loc's
+///
+/// Essentially any @source_loc's pass through the linker as "real" locs
+/// rather than the linker inserting them automatically.
+///
+/// This is important as the linker really is only linking "b3" so any layers
+/// above this linker would not be able to properly map back to it's layer without
+/// @source_loc's.
+fn push_source_aware(
+    file_idx: usize,
+    contents: String,
+    generated_line_number: usize,
+    output: &mut Vec<String>,
+    has_source_locs: bool,
+) {
+    if has_source_locs {
+        output.push(contents);
+    } else {
+        push_out(file_idx, contents, generated_line_number, output);
+    }
 }
 
 /// Get the file index for this files name
