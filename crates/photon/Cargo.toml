@@ -13,6 +13,7 @@ license = "AGPLv3"
 keywords = ["languages", "scripting", "script"]
 
 [dependencies]
+chumsky = { workspace = true }
 
 # Argument parsing helper
 clap = { version = "4.5", features = ["derive", "wrap_help"] }
