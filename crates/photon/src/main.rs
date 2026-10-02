@@ -10,9 +10,11 @@
 //! The `Photon3` crate is a crate that desugars some extra `Photon3` syntax
 //! and type information ontop of `Boson3` std.b3, view the `README.md` in the repository.
 
-use std::{error::Error, path::PathBuf};
+use std::{error::Error, fs, path::PathBuf, process};
 
 use clap::Parser;
+
+use crate::lexer::Lexer;
 mod lexer;
 mod ast;
 mod errors;
@@ -35,5 +37,21 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let input_path = &cli.input;
     let output_path = &cli.output;
+
+    // Read source file
+    let source = fs::read_to_string(input_path).unwrap_or_else(|e| {
+        eprintln!("error reading {}: {e}", input_path.display());
+        process::exit(1);
+    });
+
+    // Lex the source file
+    let tokens = Lexer::new(&source).tokenize().unwrap_or_else(|e| {
+        eprintln!("failed to tokenise file: {e}");
+        process::exit(1);
+    });
+
+
+    println!("{:?}", tokens);
+
     Ok(())
 }
