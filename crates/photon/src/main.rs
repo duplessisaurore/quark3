@@ -15,6 +15,7 @@ use std::{error::Error, path::PathBuf};
 use clap::Parser;
 mod lexer;
 mod ast;
+mod errors;
 
 #[derive(Parser)]
 #[command(
