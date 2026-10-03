@@ -35,7 +35,21 @@ pub enum PhotonErrorKind {
     UnexpectedToken {
         found: TokenKind,
         expected: TokenKind
-    }
+    },
+
+    /// An unknown top level directive was found
+    /// regarding name-wise
+    UnknownTLD {
+        name: String
+    },
+
+    /// Expected another parameter follow since a comma
+    /// was found here
+    UnexpectedEndOfParamsFollowingComma,
+
+    /// Expected another argument follow since a comma
+    /// was found here
+    UnexpectedEndOfArgsFollowingComma,
 }
 
 /// Located version of `PhotonErrorKind` w source span info
@@ -72,6 +86,15 @@ impl Display for PhotonErrorKind {
             }
             Self::UnexpectedToken { found, expected } => {
                 write!(f, "unexpected {found} at the current position, there should have been a {expected}!")
+            }
+            Self::UnknownTLD { name } => {
+                write!(f, "unknown top-level directive `@{name}`")
+            }
+            Self::UnexpectedEndOfParamsFollowingComma => {
+                write!(f, "unexpected right paren here when more params should have followed after `,`")
+            }
+            Self::UnexpectedEndOfArgsFollowingComma => {
+                write!(f, "unexpected right paren here when more arguments should have followed after `,`")
             }
         }
     }

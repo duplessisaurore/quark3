@@ -7,7 +7,13 @@
 //! - turning it into the AST
 
 use crate::{
-    ast::{Module, SourceSpan}, errors::{PhotonError, PhotonErrorKind, PhotonResult}, lexer::{Token, TokenKind},
+    ast::*,
+    errors::{
+        PhotonError,
+        PhotonErrorKind::{self, UnexpectedEndOfFile},
+        PhotonResult,
+    },
+    lexer::{Token, TokenKind},
 };
 
 /// The actual parser class itself
@@ -147,6 +153,7 @@ impl<'tokens> Parser<'tokens> {
         self.skip_newlines();
 
         while !self.is_at_end() {
+            items.push(self.parse_top_level_item()?);
             self.skip_newlines();
         }
 
@@ -156,5 +163,187 @@ impl<'tokens> Parser<'tokens> {
     /// Repeatedly skips newline tokens until the first non-newline token.
     fn skip_newlines(&mut self) {
         while let Some(_) = self.match_token(&TokenKind::Newline) {}
+    }
+
+    /// Parses a single top level module item (TLI)
+    fn parse_top_level_item(&mut self) -> PhotonResult<Located<TopLevelItem>> {
+        // We expect a TLI to be here.
+        let Some(token) = self.peek_token() else {
+            return Err(self.unexpected_eof());
+        };
+
+        // All directives match to some TLI
+        match token.value {
+            TokenKind::Directive(directive_name) => match directive_name.as_str() {
+                "namespace" => self.parse_namespace(),
+                "requires" => self.parse_requires(),
+                "entry" => self.parse_entry(),
+                "capability" => self.parse_capability(),
+                "global" => self.parse_global(),
+                "object" => self.parse_object(),
+                "fn" => self.parse_function(),
+
+                _ => Err(PhotonErrorKind::error(
+                    PhotonErrorKind::UnknownTLD {
+                        name: directive_name.clone(),
+                    },
+                    self.current_span(),
+                )),
+            },
+
+            other_token => Err(PhotonErrorKind::error(
+                PhotonErrorKind::UnexpectedToken {
+                    found: other_token,
+                    expected: TokenKind::Directive("any valid top level directive".to_string()),
+                },
+                self.current_span(),
+            )),
+
+            _ => Err(self.unexpected_eof()),
+        }
+    }
+
+    /// Parses one qualified name, this is a name in the for of
+    /// one or more namespaces::item_name
+    ///
+    /// e.x std::queue::Queue
+    fn parse_qualified_name(&mut self) -> PhotonResult<QualifiedName> {
+        let mut parts = Vec::new();
+
+        // Each part should be a valid identifier
+        parts.push(self.expect_identifier()?);
+
+        while let Some(_) = self.match_token(&TokenKind::DoubleColon) {
+            parts.push(self.expect_identifier()?);
+        }
+
+        Ok(QualifiedName::new(parts))
+    }
+
+    /// Expects an identifier to exist at the current position, erroring
+    /// otherwise
+    ///
+    /// Returns the underlying string the identifier occupies
+    fn expect_identifier(&mut self) -> PhotonResult<String> {
+        let token = self.advance()?;
+
+        if let TokenKind::Identifier(text) = token.value {
+            Ok(text)
+        } else {
+            Err(PhotonErrorKind::error(
+                PhotonErrorKind::UnexpectedToken {
+                    expected: TokenKind::Identifier(String::from("<identifier>")),
+                    found: token.value,
+                },
+                token.span,
+            ))
+        }
+    }
+
+    /// Parse a type at the current position
+    fn parse_type(&mut self) -> PhotonResult<TypeName> {
+        let name = self.parse_qualified_name()?;
+
+        Ok(TypeName::from_qualified_name(name))
+    }
+
+    /// Parse a parameter at the current position, this is some
+    /// ident: type
+    fn parse_parameter(&mut self) -> PhotonResult<Parameter> {
+        // ident
+        let name = self.expect_identifier()?;
+
+        self.expect(&TokenKind::Colon)?;
+
+        // type
+        let declared_type = self.parse_type()?;
+
+        Ok(Parameter {
+            name,
+            declared_type,
+        })
+    }
+
+    /// Parses an entire list of parameters etc.
+    ///
+    /// (param, param, param)
+    ///
+    /// outputs it as a set of params in a Vec's
+    fn parse_parameter_list(&mut self) -> PhotonResult<Vec<Parameter>> {
+        // (
+        self.expect(&TokenKind::LeftParen)?;
+
+        let mut parameters = Vec::new();
+
+        // No parameters since it ends with )
+        if let Some(_) = self.match_token(&TokenKind::RightParen) {
+            return Ok(parameters);
+        }
+
+        loop {
+            // Not a direct end of right paren, parse params
+            parameters.push(self.parse_parameter()?);
+
+            // Another parameter
+            if let Some(_) = self.match_token(&TokenKind::Comma) {
+                if self.check(&TokenKind::RightParen) {
+                    // Premature end
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::UnexpectedEndOfParamsFollowingComma,
+                        self.current_span(),
+                    ));
+                }
+
+                continue;
+            }
+
+            break;
+        }
+
+        self.expect(&TokenKind::RightParen)?;
+
+        Ok(parameters)
+    }
+
+    /// Parses an entire list of arguments etc.
+    ///
+    /// (expr, expr, expr)
+    ///
+    /// outputs it as a set of exprs in a Vec's
+    fn parse_argument_list(
+        &mut self,
+    ) -> PhotonResult<Vec<Located<Expression>>> {
+        // (
+        self.expect(&TokenKind::LeftParen)?;
+
+        let mut arguments = Vec::new();
+
+        // No parameters since it ends with )
+        if let Some(_) = self.match_token(&TokenKind::RightParen) {
+            return Ok(arguments);
+        }
+
+        loop {
+            arguments.push(self.parse_expression()?);
+
+            // Another argument
+            if let Some(_) = self.match_token(&TokenKind::Comma) {
+                if self.check(&TokenKind::RightParen) {
+                    // Premature end
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::UnexpectedEndOfArgsFollowingComma,
+                        self.current_span(),
+                    ));
+                }
+
+                continue;
+            }
+
+            break;
+        }
+
+        self.expect(&TokenKind::RightParen)?;
+
+        Ok(arguments)
     }
 }
