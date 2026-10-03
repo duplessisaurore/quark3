@@ -3,10 +3,11 @@
 
 use std::fmt::{Display, write};
 
-use crate::ast::{Located, SourceSpan};
+use crate::{ast::{Located, SourceSpan}, lexer::{Token, TokenKind}};
 
 /// All possible error kinds that can occur during
 /// the `Photon3` sugar pass.
+#[derive(Debug)]
 pub enum PhotonErrorKind {
     /// An unterminated legacy boson3 block was found.
     UnterminatedLegacyBoson3Block,
@@ -24,6 +25,17 @@ pub enum PhotonErrorKind {
 
     /// A missing directive name was found here
     MissingDirectiveName,
+
+    /// Unexpected end of file here, we should
+    /// see more tokens
+    UnexpectedEndOfFile,
+    
+    /// A token was found to be here that we did
+    /// not expect
+    UnexpectedToken {
+        found: TokenKind,
+        expected: TokenKind
+    }
 }
 
 /// Located version of `PhotonErrorKind` w source span info
@@ -54,6 +66,12 @@ impl Display for PhotonErrorKind {
             }
             Self::MissingDirectiveName => {
                 write!(f, "expected a directive name after `@`")
+            }
+            Self::UnexpectedEndOfFile => {
+                write!(f, "unexpected end of file at the current position, there should be more tokens!")
+            }
+            Self::UnexpectedToken { found, expected } => {
+                write!(f, "unexpected {found} at the current position, there should have been a {expected}!")
             }
         }
     }

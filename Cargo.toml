@@ -28,8 +28,6 @@ quark_debug = { workspace = true }
 hashbrown = "0.17.1"
 lepton3 = { git = "https://github.com/duplessisaurore/lepton3" }
 regex = "1.13.1"
-chumsky = { version = "0.13", default-features = false, features = ["std", "pratt"] }
-
 quark_map = { path = "./crates/quark_map" }
 quark_asm = { path = "./crates/quark_asm" }
 quark_debug = { path = "./crates/quark_debug" }

@@ -112,6 +112,7 @@ pub enum TokenKind {
     BitwiseXorAssign,
 
     Newline,
+    EoF,
 }
 
 impl fmt::Display for TokenKind {
@@ -199,6 +200,7 @@ impl TokenKind {
             Self::BitwiseAndAssign => "&=",
             Self::BitwiseOrAssign => "|=",
             Self::BitwiseXorAssign => "^=",
+            Self::EoF => "end of file",
             Self::Newline => "newline",
             Self::Identifier(_) => "ident",
             Self::IntLiteral(_) => "Int literal",
@@ -339,6 +341,7 @@ impl<'src> Lexer<'src> {
             self.lex_symbol()?;
         }
 
+        self.push_token(TokenKind::EoF, self.current_pos());
         Ok(self.tokens)
     }
 

@@ -18,6 +18,7 @@ use crate::lexer::Lexer;
 mod lexer;
 mod ast;
 mod errors;
+mod parser;
 
 #[derive(Parser)]
 #[command(

@@ -1,11 +1,22 @@
 //! This is the full ast that the parser will produce
 
-use std::fmt;
-
-use chumsky::span::SimpleSpan;
+use std::{fmt, ops::Range, path::Display};
 
 /// A span into a photon3 source file built off chumsksy's
-pub type SourceSpan = SimpleSpan<usize>;
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceSpan {
+    start: usize,
+    end: usize,
+}
+
+impl From<Range<usize>> for SourceSpan {
+    fn from(value: Range<usize>) -> Self {
+        Self {
+            start: value.start,
+            end: value.end,
+        }
+    }
+}
 
 /// A value with a `SourceSpan` location into a source file
 #[derive(Debug, Clone, PartialEq)]
@@ -251,7 +262,7 @@ pub struct Parameter {
 ///
 /// Every body line must be a statement, which does some
 /// operation on expressions (potentially) or something else.
-/// 
+///
 /// These don't produce values
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
@@ -402,7 +413,7 @@ pub enum Expression {
 /// The name of the method we are calling on an object
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MethodName {
-    /// Infer the name of the method, this is done through 
+    /// Infer the name of the method, this is done through
     /// infering the namespace of the object and calling the method
     /// based on that.
     Inferred(String),
@@ -422,7 +433,7 @@ impl fmt::Display for UnaryOperator {
         formatter.write_str(match self {
             Self::Negate => "-",
             Self::LogicalNot => "!",
-            Self::BitwiseNot => "~"
+            Self::BitwiseNot => "~",
         })
     }
 }
@@ -526,5 +537,13 @@ impl fmt::Display for StepOperator {
             Self::Increment => "++",
             Self::Decrement => "--",
         })
+    }
+}
+
+impl fmt::Display for SourceSpan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let start = self.start;
+        let end = self.end;
+        write!(f, "{start}..{end}")
     }
 }
