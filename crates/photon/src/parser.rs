@@ -173,7 +173,7 @@ impl<'tokens> Parser<'tokens> {
         };
 
         // All directives match to some TLI
-        match token.value {
+        match &token.value {
             TokenKind::Directive(directive_name) => match directive_name.as_str() {
                 "namespace" => self.parse_namespace(),
                 "requires" => self.parse_requires(),
@@ -193,7 +193,7 @@ impl<'tokens> Parser<'tokens> {
 
             other_token => Err(PhotonErrorKind::error(
                 PhotonErrorKind::UnexpectedToken {
-                    found: other_token,
+                    found: other_token.clone(),
                     expected: TokenKind::Directive("any valid top level directive".to_string()),
                 },
                 self.current_span(),
@@ -201,6 +201,259 @@ impl<'tokens> Parser<'tokens> {
 
             _ => Err(self.unexpected_eof()),
         }
+    }
+
+    /// Expects a directive with a certain `expected` directive type in this current
+    /// position
+    ///
+    /// Returns the span that this directive component is at
+    fn expect_directive(&mut self, expected: &str) -> PhotonResult<SourceSpan> {
+        match self.advance() {
+            // Directive match
+            Ok(Token {
+                value: TokenKind::Directive(name),
+                span,
+            }) if name == expected => Ok(span),
+
+            // Is directive, no match
+            Ok(Token {
+                value: TokenKind::Directive(name),
+                span,
+            }) => Err(PhotonErrorKind::error(
+                PhotonErrorKind::UnexpectedDirective {
+                    found: name,
+                    expected: expected.to_string(),
+                },
+                span,
+            )),
+
+            // Is not directive, no match
+            Ok(Token {
+                value: actual,
+                span,
+            }) => Err(PhotonErrorKind::error(
+                PhotonErrorKind::UnexpectedToken {
+                    found: actual,
+                    expected: TokenKind::Directive(expected.to_string()),
+                },
+                span,
+            )),
+
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Parses one namespace delcaration at the current position
+    fn parse_namespace(&mut self) -> PhotonResult<Located<TopLevelItem>> {
+        let start = self.expect_directive("namespace")?.start;
+
+        // Name of the modules namespace
+        let name = self.parse_qualified_name()?;
+        let end = self.previous_span().end;
+
+        let item = Located::new(TopLevelItem::Namespace(name), (start..end).into());
+
+        // Newline must follow TLI
+        self.require_newline()?;
+
+        Ok(item)
+    }
+
+    /// Parse one requires declaration at the current possition
+    fn parse_requires(&mut self) -> PhotonResult<Located<TopLevelItem>> {
+        let start = self.expect_directive("requires")?.start;
+
+        // Name of the module we require
+        let name = self.parse_qualified_name()?;
+        let end = self.previous_span().end;
+
+        let item = Located::new(TopLevelItem::Requires(name), (start..end).into());
+
+        self.require_newline()?;
+
+        Ok(item)
+    }
+
+    /// Parse one entry declaration at the current possition
+    fn parse_entry(&mut self) -> PhotonResult<Located<TopLevelItem>> {
+        let start = self.expect_directive("entry")?.start;
+
+        // Name of the entry function
+        let name = self.expect_identifier()?;
+        let end = self.previous_span().end;
+
+        let item = Located::new(TopLevelItem::Entry(name), (start..end).into());
+
+        self.require_newline()?;
+
+        Ok(item)
+    }
+
+    /// Parse one capability declaration at the current possition
+    fn parse_capability(&mut self) -> PhotonResult<Located<TopLevelItem>> {
+        let start = self.expect_directive("capability")?.start;
+
+        // Name of the capability binding in the local module
+        let name = self.expect_identifier()?;
+
+        // The number following, this should be the actual value
+        let number = match self.advance() {
+            Ok(Token {
+                value: TokenKind::IntLiteral(value),
+                ..
+            }) if value >= 0 => value as u64,
+
+            Ok(Token {
+                value: TokenKind::UIntLiteral(value),
+                ..
+            }) => value,
+
+            Ok(Token {
+                value: actual,
+                span,
+            }) => {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::InvalidCapabilityNumber { found: actual },
+                    span,
+                ));
+            }
+
+            Err(error) => Err(error)?,
+        };
+
+        let end = self.previous_span().end;
+
+        let item = Located::new(
+            TopLevelItem::Capability(CapabilityDeclaration { name, number }),
+            (start..end).into(),
+        );
+
+        self.require_newline()?;
+
+        Ok(item)
+    }
+
+    /// Parse one global declaration at the current position
+    fn parse_global(&mut self) -> PhotonResult<Located<TopLevelItem>> {
+        let start = self.expect_directive("global")?.start;
+
+        // global name
+        let name = self.expect_identifier()?;
+
+        self.expect(&TokenKind::Colon)?;
+
+        // global type
+        let declared_type = self.parse_type()?;
+        let end = self.previous_span().end;
+
+        let item = Located::new(
+            TopLevelItem::Global(GlobalDeclaration {
+                name,
+                declared_type,
+            }),
+            (start..end).into(),
+        );
+
+        self.require_newline()?;
+
+        Ok(item)
+    }
+
+    /// Parse one object declaration at the current position
+    fn parse_object(&mut self) -> PhotonResult<Located<TopLevelItem>> {
+        let start = self.expect_directive("object")?.start;
+
+        // object name
+        let name = self.expect_identifier()?;
+
+        // all the parmaeters of the object
+        let fields = self.parse_parameter_list()?;
+
+        let end = self.previous_span().end;
+
+        let item = Located::new(
+            TopLevelItem::Object(ObjectDeclaration { name, fields }),
+            (start..end).into(),
+        );
+
+        self.require_newline()?;
+
+        Ok(item)
+    }
+
+    /// Parse one function declaration at the current position
+    fn parse_function(&mut self) -> PhotonResult<Located<TopLevelItem>> {
+        let start = self.expect_directive("fn")?.start;
+
+        // function name
+        let name = self.expect_identifier()?;
+
+        // function params
+        let parameters = self.parse_parameter_list()?;
+
+        // function ret type
+        self.expect(&TokenKind::Arrow)?;
+        let return_type = self.parse_type()?;
+
+        let signature_end = self.previous_span().end;
+
+        self.require_newline()?;
+
+        let mut body = Vec::new();
+
+        // body of the function
+        // essentially we parse it as statements without considering directive lines
+        while !self.is_at_end()
+            && !matches!(
+                self.peek_token(),
+                Some(Token {
+                    value: TokenKind::Directive(_),
+                    ..
+                })
+            )
+        {
+            body.push(self.parse_statement()?);
+        }
+
+        // After this function declaration
+        let end = body
+            .last()
+            .map(|statement| statement.span.end)
+            .unwrap_or(signature_end);
+
+        Ok(Located::new(
+            TopLevelItem::Function(FunctionDeclaration {
+                name,
+                parameters,
+                return_type,
+                body,
+            }),
+            (start..end).into(),
+        ))
+    }
+
+    /// Forces a newline to exist at this position and advances until the next line with content
+    fn require_newline(&mut self) -> PhotonResult<()> {
+        let next_token = self.advance()?;
+
+        // Next token should be a newline
+        match next_token {
+            Token {
+                value: TokenKind::Newline,
+                ..
+            } => {}
+            Token { value, span } => Err(PhotonErrorKind::error(
+                PhotonErrorKind::UnexpectedToken {
+                    found: value,
+                    expected: TokenKind::Newline,
+                },
+                span,
+            ))?,
+        }
+
+        self.skip_newlines();
+
+        Ok(())
     }
 
     /// Parses one qualified name, this is a name in the for of
@@ -310,9 +563,7 @@ impl<'tokens> Parser<'tokens> {
     /// (expr, expr, expr)
     ///
     /// outputs it as a set of exprs in a Vec's
-    fn parse_argument_list(
-        &mut self,
-    ) -> PhotonResult<Vec<Located<Expression>>> {
+    fn parse_argument_list(&mut self) -> PhotonResult<Vec<Located<Expression>>> {
         // (
         self.expect(&TokenKind::LeftParen)?;
 

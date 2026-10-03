@@ -5,8 +5,8 @@ use std::{fmt, ops::Range, path::Display};
 /// A span into a photon3 source file built off chumsksy's
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceSpan {
-    start: usize,
-    end: usize,
+    pub start: usize,
+    pub end: usize,
 }
 
 impl From<Range<usize>> for SourceSpan {

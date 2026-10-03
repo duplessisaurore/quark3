@@ -50,6 +50,17 @@ pub enum PhotonErrorKind {
     /// Expected another argument follow since a comma
     /// was found here
     UnexpectedEndOfArgsFollowingComma,
+
+    /// Unexpected directive in the current position
+    UnexpectedDirective {
+        found: String,
+        expected: String
+    },
+
+    /// Invalid numeric literal for the @capability directive
+    InvalidCapabilityNumber {
+        found: TokenKind
+    }
 }
 
 /// Located version of `PhotonErrorKind` w source span info
@@ -95,6 +106,12 @@ impl Display for PhotonErrorKind {
             }
             Self::UnexpectedEndOfArgsFollowingComma => {
                 write!(f, "unexpected right paren here when more arguments should have followed after `,`")
+            }
+            Self::UnexpectedDirective { found, expected } => {
+                write!(f, "unexpected @{found} directive at the current position, there should have been an @{expected}!")
+            }
+            Self::InvalidCapabilityNumber { found } => {
+                write!(f, "expected non-negative integer capability number, found {found}")
             }
         }
     }
