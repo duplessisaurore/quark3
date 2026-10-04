@@ -15,9 +15,10 @@ use std::{error::Error, fs, path::PathBuf, process};
 use clap::Parser;
 
 use crate::lexer::Lexer;
-mod lexer;
+use crate::parser::Parser as PhotonParser;
 mod ast;
 mod errors;
+mod lexer;
 mod parser;
 
 #[derive(Parser)]
@@ -37,7 +38,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     let input_path = &cli.input;
-    let output_path = &cli.output;
+    let _output_path = &cli.output;
 
     // Read source file
     let source = fs::read_to_string(input_path).unwrap_or_else(|e| {
@@ -51,8 +52,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         process::exit(1);
     });
 
+    let ast = PhotonParser::new(&tokens)
+        .parse_module()
+        .unwrap_or_else(|e| {
+            eprintln!("failed to parse file: {e}");
+            process::exit(1);
+        });
 
-    println!("{:?}", tokens);
+    println!("{:?}", ast);
 
     Ok(())
 }

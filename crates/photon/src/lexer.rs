@@ -9,10 +9,9 @@
 
 use std::{fmt, str::Chars};
 
-
 use crate::{
     ast::{Located, SourceSpan},
-    errors::{PhotonError, PhotonErrorKind, PhotonResult},
+    errors::{PhotonErrorKind, PhotonResult},
 };
 
 /// One token produced by the lexer
@@ -48,15 +47,11 @@ pub enum TokenKind {
     TailCall,
     If,
     Else,
-    Unless,
     While,
-    Until,
     Do,
     For,
-    Repeat,
     Foreach,
     In,
-    Forever,
     Loop,
     Break,
     Continue,
@@ -142,15 +137,11 @@ impl TokenKind {
             Self::TailCall => "tailcall",
             Self::If => "if",
             Self::Else => "else",
-            Self::Unless => "unless",
             Self::While => "while",
-            Self::Until => "until",
             Self::Do => "do",
             Self::For => "for",
-            Self::Repeat => "repeat",
             Self::Foreach => "foreach",
             Self::In => "in",
-            Self::Forever => "forever",
             Self::Loop => "loop",
             Self::Break => "break",
             Self::Continue => "continue",
@@ -303,9 +294,9 @@ impl<'src> Lexer<'src> {
     }
 
     /// Fully tokenises the source input into a set of `Token`'s
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// This may error in many ways!! See `PhotonErrorKind`, generally
     /// if things are unterminated or if there's an invalid literal
     /// or with some garbage on the end of the number
@@ -327,7 +318,6 @@ impl<'src> Lexer<'src> {
                 continue;
             }
 
-
             if self.peek_char().is_some_and(is_valid_ident_char) {
                 self.lex_identifier_or_keyword();
                 continue;
@@ -345,14 +335,13 @@ impl<'src> Lexer<'src> {
         Ok(self.tokens)
     }
 
-
     /// Push a token to the output of the lexer phase
     /// this assumes this token ends at the current position the
     /// cursor is in
     fn push_token(&mut self, kind: TokenKind, start: usize) {
         self.tokens.push(Located::new(kind, self.span_from(start)));
     }
-    
+
     /// If the unconsumed text starts with `s`,
     /// consume it and return true.
     ///
@@ -500,7 +489,7 @@ impl<'src> Lexer<'src> {
         // essentially it didn't actually match a boson3 legacy expression
         if could_parse_boson
             .as_ref()
-            .is_ok_and(|matches_boson_expression| *matches_boson_expression == false)
+            .is_ok_and(|matches_boson_expression| !*matches_boson_expression)
         {
             self.chars = boson_checkpoint;
         }
@@ -635,7 +624,7 @@ impl<'src> Lexer<'src> {
             if is_float {
                 let bad_start = self.current_pos();
                 self.advance();
-                return Err(PhotonError::new(
+                return Err(PhotonErrorKind::error(
                     PhotonErrorKind::MalformedNumber {
                         reason: String::from("float literals cannot have a `u` suffix"),
                     },
@@ -807,15 +796,11 @@ impl<'src> Lexer<'src> {
             "tailcall" => TokenKind::TailCall,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
-            "unless" => TokenKind::Unless,
             "while" => TokenKind::While,
-            "until" => TokenKind::Until,
             "do" => TokenKind::Do,
             "for" => TokenKind::For,
-            "repeat" => TokenKind::Repeat,
             "foreach" => TokenKind::Foreach,
             "in" => TokenKind::In,
-            "forever" => TokenKind::Forever,
             "loop" => TokenKind::Loop,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
@@ -928,7 +913,7 @@ impl<'src> Lexer<'src> {
         if !self.peek_char().is_some_and(is_valid_ident_char) {
             return Err(PhotonErrorKind::error(
                 PhotonErrorKind::MissingDirectiveName,
-                self.span_from(start)
+                self.span_from(start),
             ));
         }
 

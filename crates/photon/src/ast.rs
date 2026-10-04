@@ -1,6 +1,6 @@
 //! This is the full ast that the parser will produce
 
-use std::{fmt, ops::Range, path::Display};
+use std::{fmt, ops::Range};
 
 /// A span into a photon3 source file built off chumsksy's
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -266,35 +266,18 @@ pub struct Parameter {
 /// These don't produce values
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
-    Let {
-        name: String,
-        declared_type: TypeName,
-        initializer: Located<Expression>,
-    },
-    Assignment {
-        target: Located<Expression>,
-        operator: AssignmentOperator,
-        value: Located<Expression>,
-    },
-    Step {
-        name: String,
-        operator: StepOperator,
-    },
+    Simple(SimpleStatement),
+
     Return {
         value: Option<Located<Expression>>,
     },
     TailCall {
         call: Located<Expression>,
     },
-    Expression(Located<Expression>),
     If {
         condition: Located<Expression>,
         then_body: Vec<Located<Statement>>,
         else_body: Option<Vec<Located<Statement>>>,
-    },
-    Unless {
-        condition: Located<Expression>,
-        body: Vec<Located<Statement>>,
     },
     While {
         condition: Located<Expression>,
@@ -303,16 +286,11 @@ pub enum Statement {
     DoWhile {
         body: Vec<Located<Statement>>,
         condition: Located<Expression>,
-        repeat_when: DoCondition,
     },
     For {
-        initializer: Option<Box<Located<ForClause>>>,
+        initializer: Option<Located<SimpleStatement>>,
         condition: Located<Expression>,
-        step: Option<Box<Located<ForClause>>>,
-        body: Vec<Located<Statement>>,
-    },
-    Repeat {
-        count: Located<Expression>,
+        step: Box<Option<Located<SimpleStatement>>>,
         body: Vec<Located<Statement>>,
     },
     ForEach {
@@ -320,24 +298,26 @@ pub enum Statement {
         array: Located<Expression>,
         body: Vec<Located<Statement>>,
     },
-    Forever {
+    Loop {
         body: Vec<Located<Statement>>,
     },
     Break,
     Continue,
-    LegacyBoson {
+    Boson3 {
         source: String,
     },
 }
 
-/// A for clause, this is the initialiser component of the
-/// for clause
+/// A simple statement.
+///
+/// This is a subset of statement allows, which are simple
+/// enough to be in a for statement clause.
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ForClause {
+pub enum SimpleStatement {
     Let {
         name: String,
-        declared_type: TypeName,
+        type_annotation: Option<TypeName>,
         initializer: Located<Expression>,
     },
     Assignment {
@@ -351,16 +331,6 @@ pub enum ForClause {
     },
     Expression(Located<Expression>),
 }
-
-/// The condition of a do/while statement
-/// which we can do "while" something is true or until
-/// something is true
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DoCondition {
-    While,
-    Until,
-}
-
 /// All possible kinds of expressions, these are things
 /// which actually produce some value of a type rather than
 /// only do some effect
@@ -403,7 +373,7 @@ pub enum Expression {
         when_true: Box<Located<Expression>>,
         when_false: Box<Located<Expression>>,
     },
-    LegacyBoson {
+    Boson3 {
         declared_type: TypeName,
         body: String,
         body_span: SourceSpan,

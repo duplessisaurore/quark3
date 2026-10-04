@@ -10,14 +10,14 @@ use crate::{
     ast::*,
     errors::{
         PhotonError,
-        PhotonErrorKind::{self, UnexpectedEndOfFile},
+        PhotonErrorKind::{self},
         PhotonResult,
     },
-    lexer::{Token, TokenKind},
+    lexer::{BosonBodyToken, Token, TokenKind},
 };
 
 /// The actual parser class itself
-struct Parser<'tokens> {
+pub struct Parser<'tokens> {
     /// All of the tokens we are parsing
     tokens: &'tokens [Token],
 
@@ -104,11 +104,11 @@ impl<'tokens> Parser<'tokens> {
     /// Otherwise, throw a `ParseError`
     fn expect(&mut self, expected_kind: &TokenKind) -> PhotonResult<Token> {
         // Matches token.. consume and advance
-        if self.check(&expected_kind) {
+        if self.check(expected_kind) {
             self.advance()
         } else {
             // Doesnt match! return what we got with the error
-            let found = self.peek_token().map(|token| token);
+            let found = self.peek_token();
 
             // If there's no token then we've hit an unexpected EoF
             let Some(found_token) = found else {
@@ -130,7 +130,7 @@ impl<'tokens> Parser<'tokens> {
     ///
     /// Returns Some(token) if it was consumed, None otherwise.
     fn match_token(&mut self, kind: &TokenKind) -> Option<Token> {
-        if self.check(&kind) {
+        if self.check(kind) {
             Some(
                 self.advance()
                     .expect("check already checked for a token to exist here"),
@@ -140,21 +140,55 @@ impl<'tokens> Parser<'tokens> {
         }
     }
 
+    /// Conditionally advance if the current token matches `kind`.
+    ///
+    /// Returns true if it was consumed, else false
+    fn eat(&mut self, kind: &TokenKind) -> bool {
+        self.match_token(kind).is_some()
+    }
+
     /// Runs the `Parser` continuously over the source tokens
     /// until EOF is hit or an error occurs, returns all the
     /// the AST in a `Module`
     ///
     /// # Errors
     ///
-    /// This may error in many ways!! See `PhotonError`.
-    fn parse_module(&mut self) -> PhotonResult<Module> {
+    /// This may error in many ways!! See `PhotonError`, generally
+    /// if tokens dont match up to the actual grammatical constructs
+    pub fn parse_module(&mut self) -> PhotonResult<Module> {
         let mut items = Vec::new();
 
         self.skip_newlines();
 
+        // Validate namespace declaration for this module.
+        let mut namespace_declared = false;
+
         while !self.is_at_end() {
-            items.push(self.parse_top_level_item()?);
+            items.push(match self.parse_top_level_item()? {
+                namespace @ Located {
+                    value: TopLevelItem::Namespace(_),
+                    ..
+                } => {
+                    if namespace_declared {
+                        return Err(PhotonErrorKind::error(
+                            PhotonErrorKind::DuplicateNamespace,
+                            self.previous_span(),
+                        ));
+                    }
+
+                    namespace_declared = true;
+                    namespace
+                }
+                rest => rest,
+            });
             self.skip_newlines();
+        }
+
+        if !namespace_declared {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::NoNamespace,
+                self.previous_span(),
+            ));
         }
 
         Ok(Module { items })
@@ -162,7 +196,7 @@ impl<'tokens> Parser<'tokens> {
 
     /// Repeatedly skips newline tokens until the first non-newline token.
     fn skip_newlines(&mut self) {
-        while let Some(_) = self.match_token(&TokenKind::Newline) {}
+        while self.eat(&TokenKind::Newline) {}
     }
 
     /// Parses a single top level module item (TLI)
@@ -198,8 +232,6 @@ impl<'tokens> Parser<'tokens> {
                 },
                 self.current_span(),
             )),
-
-            _ => Err(self.unexpected_eof()),
         }
     }
 
@@ -466,7 +498,7 @@ impl<'tokens> Parser<'tokens> {
         // Each part should be a valid identifier
         parts.push(self.expect_identifier()?);
 
-        while let Some(_) = self.match_token(&TokenKind::DoubleColon) {
+        while self.eat(&TokenKind::DoubleColon) {
             parts.push(self.expect_identifier()?);
         }
 
@@ -529,7 +561,7 @@ impl<'tokens> Parser<'tokens> {
         let mut parameters = Vec::new();
 
         // No parameters since it ends with )
-        if let Some(_) = self.match_token(&TokenKind::RightParen) {
+        if self.eat(&TokenKind::RightParen) {
             return Ok(parameters);
         }
 
@@ -538,7 +570,7 @@ impl<'tokens> Parser<'tokens> {
             parameters.push(self.parse_parameter()?);
 
             // Another parameter
-            if let Some(_) = self.match_token(&TokenKind::Comma) {
+            if self.eat(&TokenKind::Comma) {
                 if self.check(&TokenKind::RightParen) {
                     // Premature end
                     return Err(PhotonErrorKind::error(
@@ -570,7 +602,7 @@ impl<'tokens> Parser<'tokens> {
         let mut arguments = Vec::new();
 
         // No parameters since it ends with )
-        if let Some(_) = self.match_token(&TokenKind::RightParen) {
+        if self.eat(&TokenKind::RightParen) {
             return Ok(arguments);
         }
 
@@ -578,7 +610,7 @@ impl<'tokens> Parser<'tokens> {
             arguments.push(self.parse_expression()?);
 
             // Another argument
-            if let Some(_) = self.match_token(&TokenKind::Comma) {
+            if self.eat(&TokenKind::Comma) {
                 if self.check(&TokenKind::RightParen) {
                     // Premature end
                     return Err(PhotonErrorKind::error(
@@ -597,4 +629,1079 @@ impl<'tokens> Parser<'tokens> {
 
         Ok(arguments)
     }
+
+    /// Parses one statement at the current position
+    fn parse_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        match self.peek_token().map(|tok| &tok.value) {
+            Some(TokenKind::Return) => self.parse_return_statement(),
+            Some(TokenKind::TailCall) => self.parse_tail_call_statement(),
+            Some(TokenKind::If) => self.parse_if_statement(),
+            Some(TokenKind::While) => self.parse_while_statement(),
+            Some(TokenKind::Do) => self.parse_do_statement(),
+            Some(TokenKind::For) => self.parse_for_statement(),
+            Some(TokenKind::Foreach) => self.parse_foreach_statement(),
+            Some(TokenKind::Loop) => self.parse_loop_statement(),
+            Some(TokenKind::Break) => self.parse_break_statement(),
+            Some(TokenKind::Continue) => self.parse_continue_statement(),
+            Some(TokenKind::Boson3(_)) => self.parse_boson3_statement(),
+            _ => self.parse_simple_statement_as_statement(),
+        }
+    }
+
+    fn at_statement_terminator(&self) -> bool {
+        self.is_at_end()
+            || self.check(&TokenKind::Newline)
+            || self.check(&TokenKind::RightBrace)
+            || self.check(&TokenKind::Semicolon)
+    }
+
+    /// Parses a return statement (return something blahhh or not)
+    /// at the current position
+    fn parse_return_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        // return
+        let start = self.expect(&TokenKind::Return)?.span.start;
+
+        // Check if we have a value or not that we are returning
+        let value = if self.at_statement_terminator() {
+            None
+        } else {
+            Some(self.parse_expression()?)
+        };
+
+        let end = value
+            .as_ref()
+            .map(|value| value.span.end)
+            .unwrap_or_else(|| self.previous_span().end);
+
+        // build final ret statement
+        let statement = Located::new(Statement::Return { value }, (start..end).into());
+
+        self.require_statement_terminator()?;
+
+        Ok(statement)
+    }
+
+    /// Parses a tailcall statement
+    fn parse_tail_call_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        // This is some call expr starting with "tailcall" proceeding it
+        let start = self.expect(&TokenKind::TailCall)?.span.start;
+
+        let call = self.parse_expression()?;
+        let end = call.span.end;
+
+        let statement = Located::new(Statement::TailCall { call }, (start..end).into());
+
+        self.require_statement_terminator()?;
+
+        Ok(statement)
+    }
+
+    /// break.
+    fn parse_break_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        let break_token = self.expect(&TokenKind::Break)?;
+
+        let statement = Located::new(Statement::Break, break_token.span);
+
+        self.require_statement_terminator()?;
+
+        Ok(statement)
+    }
+
+    /// continue.
+    fn parse_continue_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        let continue_token = self.expect(&TokenKind::Continue)?;
+
+        let statement = Located::new(Statement::Continue, continue_token.span);
+
+        self.require_statement_terminator()?;
+
+        Ok(statement)
+    }
+
+    /// A legacy boson3 block statement, this is just
+    /// forwarded to boson3 so nothing really special.
+    fn parse_boson3_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        let statement = match self.advance() {
+            Ok(Token {
+                value: TokenKind::Boson3(body),
+                ..
+            }) => Located::new(Statement::Boson3 { source: body.body }, body.body_span),
+
+            Ok(Token { value, span }) => {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::UnexpectedNonB3Statement { found: value },
+                    span,
+                ));
+            }
+
+            Err(error) => Err(error)?,
+        };
+
+        self.require_statement_terminator()?;
+        Ok(statement)
+    }
+
+    /// An if statement pertaining to some condition (and potential else body)
+    fn parse_if_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        // start position
+        let start = self.expect(&TokenKind::If)?.span.start;
+
+        // must be followed by a condition and a then
+        let condition = self.parse_expression()?;
+        let then_body = self.parse_block()?;
+
+        let mut end = self.previous_span().end;
+
+        // check if there is an else body
+        let else_body = if self.eat(&TokenKind::Else) {
+            let body = self.parse_block()?;
+            end = self.previous_span().end;
+            Some(body)
+        } else {
+            None
+        };
+
+        let statement = Located::new(
+            Statement::If {
+                condition,
+                then_body,
+                else_body,
+            },
+            (start..end).into(),
+        );
+
+        Ok(statement)
+    }
+
+    /// Parses one while loop statement
+    fn parse_while_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        let start = self.expect(&TokenKind::While)?.span.start;
+
+        // condition then body
+        let condition = self.parse_expression()?;
+
+        let body = self.parse_block()?;
+        let end = self.previous_span().end;
+
+        let statement = Located::new(Statement::While { condition, body }, (start..end).into());
+
+        Ok(statement)
+    }
+
+    /// Parse one do <body> while <condition> statement
+    fn parse_do_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        // The do statement
+        let start = self.expect(&TokenKind::Do)?.span.start;
+
+        let body = self.parse_block()?;
+
+        let _while_tok = self.expect(&TokenKind::While)?;
+
+        // Condition following the block/while
+        let condition = self.parse_expression()?;
+        let end = condition.span.end;
+
+        let statement = Located::new(Statement::DoWhile { body, condition }, (start..end).into());
+
+        self.require_statement_terminator()?;
+        Ok(statement)
+    }
+
+    /// For statement, with an initialiser, condition and step.
+    ///
+    /// for (<initialiser>;<condition>;<step>);
+    fn parse_for_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        let start = self.expect(&TokenKind::For)?.span.start;
+
+        // (<initialiser
+        self.expect(&TokenKind::LeftParen)?;
+        let initializer = if self.check(&TokenKind::Semicolon) {
+            None
+        } else {
+            Some(self.parse_simple_statement()?)
+        };
+
+        // ;<condition>;
+        self.expect(&TokenKind::Semicolon)?;
+        let condition = self.parse_expression()?;
+        self.expect(&TokenKind::Semicolon)?;
+
+        // <step>)
+        let step = if self.check(&TokenKind::RightParen) {
+            None
+        } else {
+            Some(self.parse_simple_statement()?)
+        };
+
+        self.expect(&TokenKind::RightParen)?;
+
+        // body of the for loop
+        let body = self.parse_block()?;
+        let end = self.previous_span().end;
+
+        let statement = Located::new(
+            Statement::For {
+                initializer,
+                condition,
+                step: Box::new(step),
+                body,
+            },
+            (start..end).into(),
+        );
+
+        Ok(statement)
+    }
+
+    /// For element in array loop.
+    ///
+    /// This is for (<binding> in <array>)
+    fn parse_foreach_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        let start = self.expect(&TokenKind::Foreach)?.span.start;
+
+        // (<binding> in <array>)
+        self.expect(&TokenKind::LeftParen)?;
+        let binding = self.parse_parameter()?;
+
+        self.expect(&TokenKind::In)?;
+
+        let array = self.parse_expression()?;
+        self.expect(&TokenKind::RightParen)?;
+
+        // body
+        let body = self.parse_block()?;
+        let end = self.previous_span().end;
+
+        let statement = Located::new(
+            Statement::ForEach {
+                binding,
+                array,
+                body,
+            },
+            (start..end).into(),
+        );
+
+        Ok(statement)
+    }
+
+    /// A forever loop. This is essentially while(1)
+    fn parse_loop_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        let start = self.expect(&TokenKind::Loop)?.span.start;
+
+        // loop <body>
+        let body = self.parse_block()?;
+        let end = self.previous_span().end;
+
+        let statement = Located::new(Statement::Loop { body }, (start..end).into());
+
+        Ok(statement)
+    }
+
+    /// Parses one block of further statements
+    fn parse_block(&mut self) -> PhotonResult<Vec<Located<Statement>>> {
+        // opening `{`
+        self.skip_newlines();
+        self.expect(&TokenKind::LeftBrace)?;
+        self.skip_newlines();
+
+        // inside statements
+        let mut statements = Vec::new();
+
+        // find the closing `}`
+        while !self.check(&TokenKind::RightBrace) {
+            if self.is_at_end() {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::UnclosedBlockFound,
+                    self.current_span(),
+                ));
+            }
+
+            // haven't found it yet, parse next statement.
+            statements.push(self.parse_statement()?);
+            self.skip_newlines();
+        }
+
+        self.expect(&TokenKind::RightBrace)?;
+        self.skip_newlines();
+        Ok(statements)
+    }
+
+    /// Checks the parser follows with a valid statement
+    /// terminator in the current position, otherwise erroring
+    fn require_statement_terminator(&mut self) -> PhotonResult<()> {
+        if self.check(&TokenKind::Newline) {
+            self.skip_newlines();
+            return Ok(());
+        }
+
+        if self.check(&TokenKind::RightBrace)
+            || self.is_at_end()
+            || self.check(&TokenKind::Semicolon)
+        {
+            return Ok(());
+        }
+
+        // cant be at the end anyway
+        let unexpected_tok = self.advance()?;
+        Err(PhotonErrorKind::error(
+            PhotonErrorKind::UnexpectedNonEndOfStatement {
+                found: unexpected_tok.value,
+            },
+            unexpected_tok.span,
+        ))
+    }
+
+    /// Parses a simple statement in the current position
+    /// as a normal statement useable for its effect
+    fn parse_simple_statement_as_statement(&mut self) -> PhotonResult<Located<Statement>> {
+        let simple = self.parse_simple_statement()?;
+
+        // Must be followed by a terminator (else we r gluin)
+        self.require_statement_terminator()?;
+
+        Ok(Located::new(Statement::Simple(simple.value), simple.span))
+    }
+
+    /// Parses a simple statement at the current position
+    /// This includes let, step and assignment/exprs
+    fn parse_simple_statement(&mut self) -> PhotonResult<Located<SimpleStatement>> {
+        // Starts with Let = let statement
+        if self.check(&TokenKind::Let) {
+            return self.parse_let_simple_statement();
+        }
+
+        // Looks like a step statement, must be one
+        if self.looks_like_step_simple_statement() {
+            return self.parse_step_simple_statement();
+        }
+
+        // Else default to an expression/assignment in this position
+        self.parse_assignment_or_expression_simple_statement()
+    }
+
+    /// Parses a `let` statement at the current position
+    fn parse_let_simple_statement(&mut self) -> PhotonResult<Located<SimpleStatement>> {
+        // let <ident>
+        let start = self.expect(&TokenKind::Let)?.span.start;
+        let name = self.expect_identifier()?;
+
+        // Optional type annotation on this let binding
+        let type_annotation = if self.eat(&TokenKind::Colon) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        // must be followed by an assignment for let, as
+        // combined assignemnts use the base value (potentially unassigned)
+        self.expect(&TokenKind::Assign)?;
+
+        // the initialiser for the name
+        let initializer = self.parse_expression()?;
+        let end = initializer.span.end;
+
+        Ok(Located::new(
+            SimpleStatement::Let {
+                name,
+                type_annotation,
+                initializer,
+            },
+            (start..end).into(),
+        ))
+    }
+
+    /// Parses a step statement at the position
+    fn parse_step_simple_statement(&mut self) -> PhotonResult<Located<SimpleStatement>> {
+        let start = self.current_span().start;
+
+        // <name><step op>
+        let name = self.expect_identifier()?;
+
+        // i++
+        let operator = if self.eat(&TokenKind::PlusPlus) {
+            StepOperator::Increment
+        }
+        // i--
+        else if self.eat(&TokenKind::MinusMinus) {
+            StepOperator::Decrement
+        } else {
+            let found_element = self.advance()?;
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::UnexpectedNonStepOperator {
+                    found: found_element.value,
+                },
+                found_element.span,
+            ))?;
+        };
+
+        let end = self.previous_span().end;
+
+        Ok(Located::new(
+            SimpleStatement::Step { name, operator },
+            (start..end).into(),
+        ))
+    }
+
+    /// Parses either an assignment or expression simple statement
+    ///
+    /// This should be used as the top-level entry to expression parsing where
+    /// assignment is to be considered, otherwise only parse_expression.
+    fn parse_assignment_or_expression_simple_statement(
+        &mut self,
+    ) -> PhotonResult<Located<SimpleStatement>> {
+        // Left side/what we are assigning
+        let left = self.parse_expression()?;
+        let start = left.span.start;
+
+        // Whether or not this is an actual assignment expression
+        if let Some(operator) = self.parse_assignment_operator() {
+            // rhs assignment
+            let right = self.parse_expression()?;
+            let end = right.span.end;
+
+            Ok(Located::new(
+                SimpleStatement::Assignment {
+                    target: left,
+                    operator,
+                    value: right,
+                },
+                (start..end).into(),
+            ))
+        } else {
+            // Otherwise this is just an expression
+            let span = left.span;
+
+            Ok(Located::new(SimpleStatement::Expression(left), span))
+        }
+    }
+
+    /// Parses the operator for an assignment expression in the form of
+    ///
+    /// <ident> <assignment_op> <value>
+    ///
+    /// This includes compound assignment.
+    fn parse_assignment_operator(&mut self) -> Option<AssignmentOperator> {
+        let operator = match self.peek_token().map(|tok| &tok.value)? {
+            TokenKind::Assign => AssignmentOperator::Assign,
+            TokenKind::PlusAssign => AssignmentOperator::AddAssign,
+            TokenKind::MinusAssign => AssignmentOperator::SubtractAssign,
+            TokenKind::StarAssign => AssignmentOperator::MultiplyAssign,
+            TokenKind::SlashAssign => AssignmentOperator::DivideAssign,
+            TokenKind::PercentAssign => AssignmentOperator::RemainderAssign,
+            TokenKind::ShiftLeftAssign => AssignmentOperator::ShiftLeftAssign,
+            TokenKind::ShiftRightAssign => AssignmentOperator::ShiftRightAssign,
+            TokenKind::BitwiseAndAssign => AssignmentOperator::BitwiseAndAssign,
+            TokenKind::BitwiseOrAssign => AssignmentOperator::BitwiseOrAssign,
+            TokenKind::BitwiseXorAssign => AssignmentOperator::BitwiseXorAssign,
+            _ => return None,
+        };
+
+        // advance past this token
+        let _ = self.advance();
+        Some(operator)
+    }
+
+    /// Returns whether or not the sequence of tokens
+    /// from the current position can resemble a step statement
+    ///
+    /// A step statement is as follows:
+    ///
+    /// <identifier><step><end> such as i++, this is because
+    /// array concat conflicts with the operator so we need a special case
+    fn looks_like_step_simple_statement(&self) -> bool {
+        // no identifier
+        if !matches!(
+            self.peek_token(),
+            Some(Token {
+                value: TokenKind::Identifier(_),
+                ..
+            })
+        ) {
+            return false;
+        }
+
+        // no step op
+        if !matches!(
+            self.peek_token_nth(1),
+            Some(Token {
+                value: TokenKind::PlusPlus | TokenKind::MinusMinus,
+                ..
+            })
+        ) {
+            return false;
+        }
+
+        // no valid end/maybe its valid but we cant be sure
+        matches!(
+            self.peek_token_nth(2),
+            None | Some(Token {
+                value: TokenKind::Semicolon
+                    | TokenKind::RightParen
+                    | TokenKind::Newline
+                    | TokenKind::RightBrace,
+                ..
+            })
+        )
+    }
+
+    /// Parses a full expression chain, this does not consider assignment!
+    fn parse_expression(&mut self) -> PhotonResult<Located<Expression>> {
+        self.parse_conditional()
+    }
+
+    /// Parses a conditional binary operator (condition ? true_expr : false_expr)
+    fn parse_conditional(&mut self) -> PhotonResult<Located<Expression>> {
+        // condition
+        let condition = self.parse_logical_or()?;
+
+        // ?
+        if !self.eat(&TokenKind::Question) {
+            return Ok(condition);
+        }
+
+        let start = condition.span.start;
+
+        // true_expr
+        let when_true = self.parse_expression()?;
+        self.expect(&TokenKind::Colon)?;
+
+        // false_expr
+        let when_false = self.parse_expression()?;
+        let end = when_false.span.end;
+
+        Ok(Located::new(
+            Expression::Conditional {
+                condition: Box::new(condition),
+                when_true: Box::new(when_true),
+                when_false: Box::new(when_false),
+            },
+            (start..end).into(),
+        ))
+    }
+
+    /// Parses a logical or binary operator
+    fn parse_logical_or(&mut self) -> PhotonResult<Located<Expression>> {
+        // left side
+        let mut left = self.parse_logical_and()?;
+
+        // potential right side
+        while self.eat(&TokenKind::LogicalOr) {
+            let right = self.parse_logical_and()?;
+
+            left = make_binary(left, BinaryOperator::LogicalOr, right);
+        }
+
+        Ok(left)
+    }
+
+    /// Parses a bitwise and binary operator
+    fn parse_logical_and(&mut self) -> PhotonResult<Located<Expression>> {
+        // left side
+        let mut left = self.parse_bitwise_or()?;
+
+        // potential right side
+        while self.eat(&TokenKind::LogicalAnd) {
+            let right = self.parse_bitwise_or()?;
+
+            left = make_binary(left, BinaryOperator::LogicalAnd, right);
+        }
+
+        Ok(left)
+    }
+
+    /// Parses a bitwise or binary operator
+    fn parse_bitwise_or(&mut self) -> PhotonResult<Located<Expression>> {
+        // left side
+        let mut left = self.parse_bitwise_xor()?;
+
+        // potential right side
+        while self.eat(&TokenKind::BitwiseOr) {
+            let right = self.parse_bitwise_xor()?;
+
+            left = make_binary(left, BinaryOperator::BitwiseOr, right);
+        }
+
+        Ok(left)
+    }
+
+    /// Parses a bitwise xor binary operator
+    fn parse_bitwise_xor(&mut self) -> PhotonResult<Located<Expression>> {
+        // left side
+        let mut left = self.parse_bitwise_and()?;
+
+        // potential right side
+        while self.eat(&TokenKind::BitwiseXor) {
+            let right = self.parse_bitwise_and()?;
+
+            left = make_binary(left, BinaryOperator::BitwiseXor, right);
+        }
+
+        Ok(left)
+    }
+
+    /// Parses a bitwise and binary operator
+    fn parse_bitwise_and(&mut self) -> PhotonResult<Located<Expression>> {
+        // left side
+        let mut left = self.parse_equality()?;
+
+        // potential right
+        while self.eat(&TokenKind::BitwiseAnd) {
+            let right = self.parse_equality()?;
+
+            left = make_binary(left, BinaryOperator::BitwiseAnd, right);
+        }
+
+        Ok(left)
+    }
+
+    /// Parses a equality binary operator
+    fn parse_equality(&mut self) -> PhotonResult<Located<Expression>> {
+        // left side
+        let mut left = self.parse_comparison()?;
+
+        // potential right side
+        loop {
+            // ==
+            let operator = if self.eat(&TokenKind::EqualEqual) {
+                BinaryOperator::Equal
+            }
+            // !=
+            else if self.eat(&TokenKind::NotEqual) {
+                BinaryOperator::NotEqual
+            } else {
+                break;
+            };
+
+            // must be followed by right side
+            let right = self.parse_comparison()?;
+
+            left = make_binary(left, operator, right);
+        }
+
+        Ok(left)
+    }
+
+    /// Parses a comparison binary operator
+    fn parse_comparison(&mut self) -> PhotonResult<Located<Expression>> {
+        // left side
+        let mut left = self.parse_shift()?;
+
+        // potentai lright
+        loop {
+            // <
+            let operator = if self.eat(&TokenKind::Less) {
+                BinaryOperator::Less
+            }
+            // <=
+            else if self.eat(&TokenKind::LessEqual) {
+                BinaryOperator::LessEqual
+            // >
+            } else if self.eat(&TokenKind::Greater) {
+                BinaryOperator::Greater
+            // >=
+            } else if self.eat(&TokenKind::GreaterEqual) {
+                BinaryOperator::GreaterEqual
+            } else {
+                break;
+            };
+
+            // must be followed by right side
+            let right = self.parse_shift()?;
+
+            left = make_binary(left, operator, right);
+        }
+
+        Ok(left)
+    }
+
+    /// Parses a shifting binary operator
+    fn parse_shift(&mut self) -> PhotonResult<Located<Expression>> {
+        // left side
+        let mut left = self.parse_additive()?;
+
+        // potential right side
+        loop {
+            // <<
+            let operator = if self.eat(&TokenKind::ShiftLeft) {
+                BinaryOperator::ShiftLeft
+            }
+            // >>
+            else if self.eat(&TokenKind::ShiftRight) {
+                BinaryOperator::ShiftRight
+            } else {
+                break;
+            };
+
+            // must be a following right expression applied to
+            let right = self.parse_additive()?;
+
+            left = make_binary(left, operator, right);
+        }
+
+        Ok(left)
+    }
+
+    /// Parses an additive binary expression
+    fn parse_additive(&mut self) -> PhotonResult<Located<Expression>> {
+        // left side
+        let mut left = self.parse_multiplicative()?;
+
+        // potential right side
+        loop {
+            // +
+            let operator = if self.eat(&TokenKind::Plus) {
+                BinaryOperator::Add
+            }
+            // -
+            else if self.eat(&TokenKind::Minus) {
+                BinaryOperator::Subtract
+            }
+            // array concat ++
+            else if self.eat(&TokenKind::PlusPlus) {
+                BinaryOperator::ArrayAppend
+            } else {
+                break;
+            };
+
+            // must be a following right expression applied to
+            let right = self.parse_multiplicative()?;
+
+            left = make_binary(left, operator, right);
+        }
+
+        Ok(left)
+    }
+
+    /// Parses a multiplicative binary expression
+    fn parse_multiplicative(&mut self) -> PhotonResult<Located<Expression>> {
+        // left side
+        let mut left = self.parse_unary()?;
+
+        // potential right side
+        loop {
+            // *
+            let operator = if self.eat(&TokenKind::Star) {
+                BinaryOperator::Multiply
+            }
+            // /
+            else if self.eat(&TokenKind::Slash) {
+                BinaryOperator::Divide
+            }
+            // %
+            else if self.eat(&TokenKind::Percent) {
+                BinaryOperator::Remainder
+            } else {
+                break;
+            };
+
+            // must be a following right expression applied to
+            let right = self.parse_unary()?;
+
+            left = make_binary(left, operator, right);
+        }
+
+        Ok(left)
+    }
+
+    /// Parses a unary expression, (unary op)some
+    fn parse_unary(&mut self) -> PhotonResult<Located<Expression>> {
+        // The start of the current unary expression
+        let start = self.current_span().start;
+
+        // - negative
+        if self.eat(&TokenKind::Minus) {
+            let operand = self.parse_unary()?;
+            let end = operand.span.end;
+
+            return Ok(Located::new(
+                Expression::Unary {
+                    operator: UnaryOperator::Negate,
+                    operand: Box::new(operand),
+                },
+                (start..end).into(),
+            ));
+        }
+
+        // ! logical not
+        if self.eat(&TokenKind::LogicalNot) {
+            let operand = self.parse_unary()?;
+            let end = operand.span.end;
+
+            return Ok(Located::new(
+                Expression::Unary {
+                    operator: UnaryOperator::LogicalNot,
+                    operand: Box::new(operand),
+                },
+                (start..end).into(),
+            ));
+        }
+
+        // ~ bitwise not
+        if self.eat(&TokenKind::BitwiseNot) {
+            let operand = self.parse_unary()?;
+            let end = operand.span.end;
+
+            return Ok(Located::new(
+                Expression::Unary {
+                    operator: UnaryOperator::BitwiseNot,
+                    operand: Box::new(operand),
+                },
+                (start..end).into(),
+            ));
+        }
+
+        self.parse_postfix()
+    }
+
+    /// Parses a postfix expression, some(postfix op)
+    fn parse_postfix(&mut self) -> PhotonResult<Located<Expression>> {
+        // some
+        let mut expression = self.parse_primary()?;
+        let start = expression.span.start;
+
+        // (postfix op)
+        loop {
+            // foo(...)
+            // this is a function call.
+            if self.check(&TokenKind::LeftParen) {
+                // parse all arguments to foo/some
+                let arguments = self.parse_argument_list()?;
+                let end = self.previous_span().end;
+
+                expression = Located::new(
+                    Expression::Call {
+                        callee: Box::new(expression),
+                        arguments,
+                    },
+                    (start..end).into(),
+                );
+
+                continue;
+            }
+
+            // array[index]
+            if self.eat(&TokenKind::LeftBracket) {
+                // underlying index
+                let index = self.parse_expression()?;
+
+                let right_bracket = self.expect(&TokenKind::RightBracket)?;
+
+                let end = right_bracket.span.end;
+
+                expression = Located::new(
+                    Expression::Index {
+                        array: Box::new(expression),
+                        index: Box::new(index),
+                    },
+                    (start..end).into(),
+                );
+
+                continue;
+            }
+
+            // object.field / object.method(...)
+            if self.eat(&TokenKind::Dot) {
+                let name = self.expect_identifier()?;
+
+                // check if this is an object method call
+                if self.check(&TokenKind::LeftParen) {
+                    let arguments = self.parse_argument_list()?;
+                    let end = self.previous_span().end;
+
+                    expression = Located::new(
+                        Expression::MethodCall {
+                            receiver: Box::new(expression),
+                            method: MethodName::Inferred(name),
+                            arguments,
+                        },
+                        (start..end).into(),
+                    );
+                } else {
+                    // normal object field access
+                    let start = expression.span.start;
+                    let end = self.previous_span().end;
+
+                    expression = Located::new(
+                        Expression::FieldAccess {
+                            receiver: Box::new(expression),
+                            field: name,
+                        },
+                        (start..end).into(),
+                    );
+                }
+
+                continue;
+            }
+
+            // qualified method call, as opposed to inferred from type.
+            // object->foo::bar(...)
+            if self.eat(&TokenKind::Arrow) {
+                let name = self.parse_qualified_name()?;
+                let arguments = self.parse_argument_list()?;
+
+                let end = self.previous_span().end;
+
+                expression = Located::new(
+                    Expression::MethodCall {
+                        receiver: Box::new(expression),
+                        method: MethodName::Qualified(name),
+                        arguments,
+                    },
+                    (start..end).into(),
+                );
+
+                continue;
+            }
+
+            break;
+        }
+
+        Ok(expression)
+    }
+
+    /// Parses a primary expression, these are direct bottom
+    /// non-operator literals etc. that produce a value directly
+    fn parse_primary(&mut self) -> PhotonResult<Located<Expression>> {
+        // Identifier we want to parse specially using parse_qualified_name
+        // so test that first
+        if matches!(
+            self.peek_token(),
+            Some(Token {
+                value: TokenKind::Identifier(_),
+                ..
+            })
+        ) {
+            let start = self.current_span().start;
+
+            // Parse the full identifier name..,,
+            let name = self.parse_qualified_name()?;
+            let end = self.previous_span().end;
+
+            return Ok(Located::new(Expression::Name(name), (start..end).into()));
+        }
+
+        // there must be a primary in this position
+        let next_tok = self.advance()?;
+        let (token, span) = (next_tok.value, next_tok.span);
+
+        match token {
+            // literals => produce value directly in expr
+            TokenKind::IntLiteral(value) => Ok(Located::new(Expression::IntLiteral(value), span)),
+
+            TokenKind::UIntLiteral(value) => Ok(Located::new(Expression::UIntLiteral(value), span)),
+
+            TokenKind::FloatLiteral(value) => {
+                Ok(Located::new(Expression::FloatLiteral(value), span))
+            }
+
+            TokenKind::BoolLiteral(value) => Ok(Located::new(Expression::BoolLiteral(value), span)),
+
+            // sub-expression in paren
+            TokenKind::LeftParen => {
+                let start = span.start;
+
+                // (expr)
+                let mut expression = self.parse_expression()?;
+                let right_paren = self.expect(&TokenKind::RightParen)?;
+
+                expression.span = (start..right_paren.span.end).into();
+                Ok(expression)
+            }
+
+            // array literal `[`
+            TokenKind::LeftBracket => self.parse_array_literal_after_open(span.start),
+
+            // legacy boson element b3<type>
+            TokenKind::Boson3(BosonBodyToken {
+                declared_type,
+                body,
+                body_span,
+            }) => Ok(Located::new(
+                Expression::Boson3 {
+                    declared_type: TypeName::from_qualified_name(QualifiedName::from_text(
+                        &declared_type,
+                    )),
+                    body,
+                    body_span,
+                },
+                span,
+            )),
+
+            // non-valid primary expressions
+            actual => Err(PhotonErrorKind::error(
+                PhotonErrorKind::UnexpectedNonExpression { found: actual },
+                span,
+            ))?,
+        }
+    }
+
+    /// Parses the remaining elements of an array literal
+    /// after the opening `[`
+    ///
+    /// The start should be the location where the `[` is.
+    fn parse_array_literal_after_open(
+        &mut self,
+        start: usize,
+    ) -> PhotonResult<Located<Expression>> {
+        // The final array elements set
+        let mut elements = Vec::new();
+
+        // No array elements
+        if self.check(&TokenKind::RightBracket) {
+            let end = self.expect(&TokenKind::RightBracket)?.span.end;
+
+            return Ok(Located::new(
+                Expression::ArrayLiteral(elements),
+                (start..end).into(),
+            ));
+        }
+
+        // Element loop
+        loop {
+            elements.push(self.parse_expression()?);
+
+            // Elements must be followed by a comma
+            if self.eat(&TokenKind::Comma) {
+                if self.check(&TokenKind::RightBracket) {
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::UnexpectedEndOfArrayElemsFollowingComma,
+                        self.current_span(),
+                    ));
+                }
+
+                continue;
+            }
+
+            break;
+        }
+
+        // Arrays should end in ]
+        let end = self.expect(&TokenKind::RightBracket)?.span.end;
+
+        Ok(Located::new(
+            Expression::ArrayLiteral(elements),
+            (start..end).into(),
+        ))
+    }
+}
+
+/// Make a binary expression from a
+///
+/// left    <operator>    right
+///
+/// expression.
+fn make_binary(
+    left: Located<Expression>,
+    operator: BinaryOperator,
+    right: Located<Expression>,
+) -> Located<Expression> {
+    let span: SourceSpan = (left.span.start..right.span.end).into();
+
+    Located::new(
+        Expression::Binary {
+            left: Box::new(left),
+            operator,
+            right: Box::new(right),
+        },
+        span,
+    )
 }
