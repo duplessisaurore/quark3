@@ -110,100 +110,6 @@ pub enum TokenKind {
     EoF,
 }
 
-impl fmt::Display for TokenKind {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Identifier(name) => write!(formatter, "identifier `{name}`"),
-            Self::IntLiteral(value) => write!(formatter, "Int literal `{value}`"),
-            Self::UIntLiteral(value) => write!(formatter, "UInt literal `{value}u`"),
-            Self::FloatLiteral(value) => write!(formatter, "Float literal `{value}`"),
-            Self::BoolLiteral(value) => write!(formatter, "Bool literal `{value}`"),
-            Self::Directive(name) => write!(formatter, "directive `@{name}`"),
-            other => formatter.write_str(other.symbol_name()),
-        }
-    }
-}
-
-impl TokenKind {
-    /// Returns the name/kind of the symbol expressed as a str
-    /// (essentially stringify)
-    ///
-    /// Returns the name of the "type" rather than the contents (etc for literals,
-    /// we return the "type" rather than the content)
-    fn symbol_name(&self) -> &'static str {
-        match self {
-            Self::Let => "let",
-            Self::Return => "return",
-            Self::TailCall => "tailcall",
-            Self::If => "if",
-            Self::Else => "else",
-            Self::While => "while",
-            Self::Do => "do",
-            Self::For => "for",
-            Self::Foreach => "foreach",
-            Self::In => "in",
-            Self::Loop => "loop",
-            Self::Break => "break",
-            Self::Continue => "continue",
-            Self::LeftParen => "(",
-            Self::RightParen => ")",
-            Self::LeftBrace => "{",
-            Self::RightBrace => "}",
-            Self::LeftBracket => "[",
-            Self::RightBracket => "]",
-            Self::Comma => ",",
-            Self::Colon => ":",
-            Self::Semicolon => ";",
-            Self::Question => "?",
-            Self::Dot => ".",
-            Self::DoubleColon => "::",
-            Self::Arrow => "->",
-            Self::Assign => "=",
-            Self::Plus => "+",
-            Self::Minus => "-",
-            Self::Star => "*",
-            Self::Slash => "/",
-            Self::Percent => "%",
-            Self::EqualEqual => "==",
-            Self::NotEqual => "!=",
-            Self::Less => "<",
-            Self::LessEqual => "<=",
-            Self::Greater => ">",
-            Self::GreaterEqual => ">=",
-            Self::ShiftLeft => "<<",
-            Self::ShiftRight => ">>",
-            Self::BitwiseAnd => "&",
-            Self::BitwiseOr => "|",
-            Self::BitwiseXor => "^",
-            Self::LogicalAnd => "&&",
-            Self::LogicalOr => "||",
-            Self::LogicalNot => "!",
-            Self::BitwiseNot => "~",
-            Self::PlusPlus => "++",
-            Self::MinusMinus => "--",
-            Self::PlusAssign => "+=",
-            Self::MinusAssign => "-=",
-            Self::StarAssign => "*=",
-            Self::SlashAssign => "/=",
-            Self::PercentAssign => "%=",
-            Self::ShiftLeftAssign => "<<=",
-            Self::ShiftRightAssign => ">>=",
-            Self::BitwiseAndAssign => "&=",
-            Self::BitwiseOrAssign => "|=",
-            Self::BitwiseXorAssign => "^=",
-            Self::EoF => "end of file",
-            Self::Newline => "newline",
-            Self::Identifier(_) => "ident",
-            Self::IntLiteral(_) => "Int literal",
-            Self::UIntLiteral(_) => "UInt literal",
-            Self::FloatLiteral(_) => "Float literal",
-            Self::BoolLiteral(_) => "Bool literal",
-            Self::Directive(_) => "Boson3 @directive",
-            Self::Boson3(_) => "legacy boson3 expr",
-        }
-    }
-}
-
 /// The actual `Lexer` struct,
 /// this is responsible for tokenising the `source` into a set
 /// of `Tokens`
@@ -990,4 +896,98 @@ fn is_reserved(c: char) -> bool {
             | '^'
             | '~'
     )
+}
+
+impl fmt::Display for TokenKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Identifier(name) => write!(formatter, "identifier `{name}`"),
+            Self::IntLiteral(value) => write!(formatter, "Int literal `{value}`"),
+            Self::UIntLiteral(value) => write!(formatter, "UInt literal `{value}u`"),
+            Self::FloatLiteral(value) => write!(formatter, "Float literal `{value}`"),
+            Self::BoolLiteral(value) => write!(formatter, "Bool literal `{value}`"),
+            Self::Directive(name) => write!(formatter, "directive `@{name}`"),
+            other => formatter.write_str(other.symbol_name()),
+        }
+    }
+}
+
+impl TokenKind {
+    /// Returns the name/kind of the symbol expressed as a str
+    /// (essentially stringify)
+    ///
+    /// Returns the name of the "type" rather than the contents (etc for literals,
+    /// we return the "type" rather than the content)
+    fn symbol_name(&self) -> &'static str {
+        match self {
+            Self::Let => "let",
+            Self::Return => "return",
+            Self::TailCall => "tailcall",
+            Self::If => "if",
+            Self::Else => "else",
+            Self::While => "while",
+            Self::Do => "do",
+            Self::For => "for",
+            Self::Foreach => "foreach",
+            Self::In => "in",
+            Self::Loop => "loop",
+            Self::Break => "break",
+            Self::Continue => "continue",
+            Self::LeftParen => "(",
+            Self::RightParen => ")",
+            Self::LeftBrace => "{",
+            Self::RightBrace => "}",
+            Self::LeftBracket => "[",
+            Self::RightBracket => "]",
+            Self::Comma => ",",
+            Self::Colon => ":",
+            Self::Semicolon => ";",
+            Self::Question => "?",
+            Self::Dot => ".",
+            Self::DoubleColon => "::",
+            Self::Arrow => "->",
+            Self::Assign => "=",
+            Self::Plus => "+",
+            Self::Minus => "-",
+            Self::Star => "*",
+            Self::Slash => "/",
+            Self::Percent => "%",
+            Self::EqualEqual => "==",
+            Self::NotEqual => "!=",
+            Self::Less => "<",
+            Self::LessEqual => "<=",
+            Self::Greater => ">",
+            Self::GreaterEqual => ">=",
+            Self::ShiftLeft => "<<",
+            Self::ShiftRight => ">>",
+            Self::BitwiseAnd => "&",
+            Self::BitwiseOr => "|",
+            Self::BitwiseXor => "^",
+            Self::LogicalAnd => "&&",
+            Self::LogicalOr => "||",
+            Self::LogicalNot => "!",
+            Self::BitwiseNot => "~",
+            Self::PlusPlus => "++",
+            Self::MinusMinus => "--",
+            Self::PlusAssign => "+=",
+            Self::MinusAssign => "-=",
+            Self::StarAssign => "*=",
+            Self::SlashAssign => "/=",
+            Self::PercentAssign => "%=",
+            Self::ShiftLeftAssign => "<<=",
+            Self::ShiftRightAssign => ">>=",
+            Self::BitwiseAndAssign => "&=",
+            Self::BitwiseOrAssign => "|=",
+            Self::BitwiseXorAssign => "^=",
+            Self::EoF => "end of file",
+            Self::Newline => "newline",
+            Self::Identifier(_) => "ident",
+            Self::IntLiteral(_) => "Int literal",
+            Self::UIntLiteral(_) => "UInt literal",
+            Self::FloatLiteral(_) => "Float literal",
+            Self::BoolLiteral(_) => "Bool literal",
+            Self::Directive(_) => "Boson3 @directive",
+            Self::Boson3(_) => "legacy boson3 expr",
+        }
+    }
 }

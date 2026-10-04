@@ -50,60 +50,6 @@ pub struct QualifiedName {
     pub segments: Vec<String>,
 }
 
-impl QualifiedName {
-    /// Creates a new QualifiedName from it's segments.
-    pub fn new(segments: Vec<String>) -> Self {
-        debug_assert!(!segments.is_empty());
-        Self { segments }
-    }
-
-    /// Converts a section of text that maybe a qualified name
-    /// to it's segments in a `QualifiedName`
-    pub fn from_text(text: &str) -> Self {
-        Self::new(text.split("::").map(str::to_owned).collect())
-    }
-
-    /// Whether this name is actually qualified or not from some namespace
-    pub fn is_unqualified(&self) -> bool {
-        self.segments.len() == 1
-    }
-
-    /// The last segment of the qualified name (the actual element being ref to)
-    pub fn last(&self) -> &str {
-        self.segments
-            .last()
-            .expect("QualifiedName always contains at least one segment")
-    }
-
-    /// Return the qualified name of the namespace of this qualified name.
-    ///
-    /// Essentially
-    ///
-    /// std::queue::Queue (std, queue, Queue) -> std::queue (std, queue)
-    pub fn namespace(&self) -> Option<Self> {
-        (self.segments.len() > 1)
-            .then(|| Self::new(self.segments[..self.segments.len() - 1].to_vec()))
-    }
-
-    /// Qualify this QualifiedName from some other qualified name as an element
-    /// under its namespace
-    pub fn qualify_from(&self, namespace: &QualifiedName) -> Self {
-        if self.is_unqualified() {
-            let mut segments = namespace.segments.clone();
-            segments.push(self.last().to_owned());
-            Self::new(segments)
-        } else {
-            self.clone()
-        }
-    }
-}
-
-impl fmt::Display for QualifiedName {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.segments.join("::"))
-    }
-}
-
 /// Possible allowed type names in type positions
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeName {
@@ -117,37 +63,6 @@ pub enum TypeName {
     Void,
     Any,
     Object(QualifiedName),
-}
-
-impl TypeName {
-    /// Turns a qualified name into a type, this assumes
-    /// that all non-direct Int, UInt etc. types refer to an object.
-    pub fn from_qualified_name(name: QualifiedName) -> Self {
-        if name.is_unqualified() {
-            match name.last() {
-                "Int" => return Self::Int,
-                "UInt" => return Self::UInt,
-                "Float" => return Self::Float,
-                "Bool" => return Self::Bool,
-                "Array" => return Self::Array,
-                "Tag" => return Self::Tag,
-                "Unit" => return Self::Unit,
-                "Void" => return Self::Void,
-                "Any" => return Self::Any,
-                _ => {}
-            }
-        }
-
-        Self::Object(name)
-    }
-
-    /// Returns the name of this type if it's an object-type.
-    pub fn object_name(&self) -> Option<&QualifiedName> {
-        match self {
-            Self::Object(name) => Some(name),
-            _ => None,
-        }
-    }
 }
 
 impl fmt::Display for TypeName {
@@ -173,17 +88,6 @@ impl fmt::Display for TypeName {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
     pub items: Vec<Located<TopLevelItem>>,
-}
-
-impl Module {
-    /// Resolves and finds the namespace that is part of the module,
-    /// this is the full namespace of the module
-    pub fn namespace(&self) -> Option<&QualifiedName> {
-        self.items.iter().find_map(|item| match &item.value {
-            TopLevelItem::Namespace(namespace) => Some(namespace),
-            _ => None,
-        })
-    }
 }
 
 /// All the possible top level items in a module of photon3 source code
@@ -398,16 +302,6 @@ pub enum UnaryOperator {
     BitwiseNot,
 }
 
-impl fmt::Display for UnaryOperator {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Negate => "-",
-            Self::LogicalNot => "!",
-            Self::BitwiseNot => "~",
-        })
-    }
-}
-
 /// All possible binary operators that exist
 /// between two operands
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -431,6 +325,40 @@ pub enum BinaryOperator {
     LogicalAnd,
     LogicalOr,
     ArrayAppend,
+}
+
+/// All operators that can exist in the let binding
+/// assignment state
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssignmentOperator {
+    Assign,
+    AddAssign,
+    SubtractAssign,
+    MultiplyAssign,
+    DivideAssign,
+    RemainderAssign,
+    ShiftLeftAssign,
+    ShiftRightAssign,
+    BitwiseAndAssign,
+    BitwiseOrAssign,
+    BitwiseXorAssign,
+}
+
+/// All step operators, these increment or decrement some value
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepOperator {
+    Increment,
+    Decrement,
+}
+
+impl fmt::Display for UnaryOperator {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Negate => "-",
+            Self::LogicalNot => "!",
+            Self::BitwiseNot => "~",
+        })
+    }
 }
 
 impl fmt::Display for BinaryOperator {
@@ -459,23 +387,6 @@ impl fmt::Display for BinaryOperator {
     }
 }
 
-/// All operators that can exist in the let binding
-/// assignment state
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AssignmentOperator {
-    Assign,
-    AddAssign,
-    SubtractAssign,
-    MultiplyAssign,
-    DivideAssign,
-    RemainderAssign,
-    ShiftLeftAssign,
-    ShiftRightAssign,
-    BitwiseAndAssign,
-    BitwiseOrAssign,
-    BitwiseXorAssign,
-}
-
 impl fmt::Display for AssignmentOperator {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -494,13 +405,6 @@ impl fmt::Display for AssignmentOperator {
     }
 }
 
-/// All step operators, these increment or decrement some value
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StepOperator {
-    Increment,
-    Decrement,
-}
-
 impl fmt::Display for StepOperator {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -515,5 +419,139 @@ impl fmt::Display for SourceSpan {
         let start = self.start;
         let end = self.end;
         write!(f, "{start}..{end}")
+    }
+}
+
+impl QualifiedName {
+    /// Creates a new QualifiedName from it's segments.
+    pub fn new(segments: Vec<String>) -> Self {
+        debug_assert!(!segments.is_empty());
+        Self { segments }
+    }
+
+    /// Converts a section of text that maybe a qualified name
+    /// to it's segments in a `QualifiedName`
+    pub fn from_text(text: &str) -> Self {
+        Self::new(text.split("::").map(str::to_owned).collect())
+    }
+
+    /// Whether this name is actually qualified or not from some namespace
+    pub fn is_unqualified(&self) -> bool {
+        self.segments.len() == 1
+    }
+
+    /// The last segment of the qualified name (the actual element being ref to)
+    pub fn last(&self) -> &str {
+        self.segments
+            .last()
+            .expect("QualifiedName always contains at least one segment")
+    }
+
+    /// Return the qualified name of the namespace of this qualified name.
+    ///
+    /// Essentially
+    ///
+    /// std::queue::Queue (std, queue, Queue) -> std::queue (std, queue)
+    pub fn namespace(&self) -> Option<Self> {
+        (self.segments.len() > 1)
+            .then(|| Self::new(self.segments[..self.segments.len() - 1].to_vec()))
+    }
+
+    /// Qualify this QualifiedName from some other qualified name as an element
+    /// under its namespace
+    pub fn qualify_from(&self, namespace: &QualifiedName) -> Self {
+        if self.is_unqualified() {
+            let mut segments = namespace.segments.clone();
+            segments.push(self.last().to_owned());
+            Self::new(segments)
+        } else {
+            self.clone()
+        }
+    }
+
+    /// Resolves this qualified name under the current namespace.
+    ///
+    /// If this name's outmost namespace is self:: this maps to the current namespace.
+    /// If this name is entirely unqualified (no namespace ref), this maps to the current namespace.
+    ///
+    /// Otherwise this is just `name`.
+    pub fn resolve(&self, current_namespace: &QualifiedName) -> QualifiedName {
+        // self::
+        if self
+            .segments
+            .first()
+            .is_some_and(|segment| segment == "self")
+        {
+            let mut segments = current_namespace.segments.clone();
+            segments.extend(self.segments.iter().skip(1).cloned());
+            return QualifiedName::new(segments);
+        }
+
+        // unqualified
+        if self.is_unqualified() {
+            self.qualify_from(current_namespace)
+        } else {
+            self.clone()
+        }
+    }
+}
+
+impl fmt::Display for QualifiedName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.segments.join("::"))
+    }
+}
+
+impl Module {
+    /// Resolves and finds the namespace that is part of the module,
+    /// this is the full namespace of the module
+    pub fn namespace(&self) -> Option<&QualifiedName> {
+        self.items.iter().find_map(|item| match &item.value {
+            TopLevelItem::Namespace(namespace) => Some(namespace),
+            _ => None,
+        })
+    }
+}
+
+impl TypeName {
+    /// Turns a qualified name into a type, this assumes
+    /// that all non-direct Int, UInt etc. types refer to an object.
+    pub fn from_qualified_name(name: QualifiedName) -> Self {
+        if name.is_unqualified() {
+            match name.last() {
+                "Int" => return Self::Int,
+                "UInt" => return Self::UInt,
+                "Float" => return Self::Float,
+                "Bool" => return Self::Bool,
+                "Array" => return Self::Array,
+                "Tag" => return Self::Tag,
+                "Unit" => return Self::Unit,
+                "Void" => return Self::Void,
+                "Any" => return Self::Any,
+                _ => {}
+            }
+        }
+
+        Self::Object(name)
+    }
+
+    /// Returns the name of this type if it's an object-type.
+    pub fn object_name(&self) -> Option<&QualifiedName> {
+        match self {
+            Self::Object(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Canonicalises this type name to the full type name
+    /// including any required namespace
+    ///
+    /// Only real introduced type names are essentially object,
+    /// so this just resolves object.
+    pub fn canonicalise(&self, current_namespace: &QualifiedName) -> TypeName {
+        match self {
+            TypeName::Object(name) => TypeName::Object(name.resolve(current_namespace)),
+            primitive => primitive.clone(),
+        }
     }
 }
