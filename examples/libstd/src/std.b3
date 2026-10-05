@@ -1877,7 +1877,7 @@
     array.nth
 @end
 
-// ## @macro std::array_set <array> [ <index> ] = <rhs>
+// ## @macro std::array_set <array> [ <index> ] <operator> <rhs>
 //
 // ### Description
 // Updates an Array element in place and leaves no value.
@@ -1887,6 +1887,7 @@
 // ### Arguments
 // <array>: An Array expression.
 // <index>: A UInt expression.
+// <operator>: =, +=, -=, *=, <<=, &=, |=, or ^=.
 // <rhs>: An expression producing any value.
 //
 @macro array_set (array, open, index, close, operator, rhs)
@@ -1896,6 +1897,379 @@
     $array
     $index
     $rhs
+    array.set
+    pop
+@end
+
+@macro array_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^-=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    array.nth
+    $rhs
+    numeric.sub
+    array.set
+    pop
+@end
+
+@macro array_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^\*=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    numeric.mul
+    array.set
+    pop
+@end
+
+@macro array_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^<<=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    numeric.shift.left
+    array.set
+    pop
+@end
+
+@macro array_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^&=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    bitwise.and
+    array.set
+    pop
+@end
+
+@macro array_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^\|=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    bitwise.or
+    array.set
+    pop
+@end
+
+@macro array_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^\^=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    bitwise.xor
+    array.set
+    pop
+@end
+
+
+// ## @macro std::array_int_set <array> [ <index> ] <operator> <rhs>
+//
+// ### Description
+// Performs Int assignment or compound assignment on an existing array item that should
+// be of the Int type.
+//
+// This forwards all of the underlying `std::array_set` operations, and allows for the usage
+// of >>=, %= and /= too.
+//
+// ### Arguments
+// <array>: An Array expression.
+// <index>: A UInt expression.
+// <operator>:  Base `std::array_set` operators, and >>=, %= or /=.
+// <rhs>: An expression producing any value.
+//
+@macro array_int_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^(=|\+=|-=|\*=|<<=|&=|\|=|\^=)$
+    !std::array_set { 
+        $array 
+    } $open {
+        $index
+    } $close $operator {
+        $rhs
+    }
+@end
+
+@macro array_int_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^/=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    int.div
+    array.set
+    pop
+@end
+
+@macro array_int_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^%=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    int.mod
+    array.set
+    pop
+@end
+
+@macro array_int_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^>>=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    int.shift.right
+    array.set
+    pop
+@end
+
+// ## @macro std::array_uint_set <array> [ <index> ] <operator> <rhs>
+//
+// ### Description
+// Performs UInt assignment or compound assignment on an existing array item that should
+// be of the UInt type.
+//
+// This forwards all of the underlying `std::array_set` operations, and allows for the usage
+// of >>=, %= and /= too.
+//
+// ### Arguments
+// <array>: An Array expression.
+// <index>: A UInt expression.
+// <operator>:  Base `std::array_set` operators, and >>=, %= or /=.
+// <rhs>: An expression producing any value.
+//
+@macro array_uint_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^(=|\+=|-=|\*=|<<=|&=|\|=|\^=)$
+    !std::array_set { 
+        $array 
+    } $open {
+        $index
+    } $close $operator {
+        $rhs
+    }
+@end
+
+@macro array_uint_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^/=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    uint.div
+    array.set
+    pop
+@end
+
+@macro array_uint_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^%=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    uint.mod
+    array.set
+    pop
+@end
+
+@macro array_uint_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^>>=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    uint.shift.right
+    array.set
+    pop
+@end
+
+// ## @macro std::array_float_set <array> [ <index> ] <operator> <rhs>
+//
+// ### Description
+// Performs Float assignment or compound assignment on an existing array item that should
+// be of the Float type.
+//
+// This permits for the operations of =, +=, -=, *=, /=, %=, where = is the same
+// underlying `std::array_set` operation.
+//
+// ### Arguments
+// <array>: An Array expression.
+// <index>: A UInt expression.
+// <operator>: =, +=, -=, *=, /= or %=.
+// <rhs>: An expression producing any value.
+//
+@macro array_float_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^(=)$
+    !std::array_set { 
+        $array 
+    } $open {
+        $index
+    } $close $operator {
+        $rhs
+    }
+@end
+
+@macro array_float_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^\+=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    float.add
+    array.set
+    pop
+@end
+
+@macro array_float_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^-=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    float.sub
+    array.set
+    pop
+@end
+
+@macro array_float_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^\*=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    float.mul
+    array.set
+    pop
+@end
+
+@macro array_float_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^/=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    float.div
+    array.set
+    pop
+@end
+
+@macro array_float_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
+    @matches operator ^%=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    swap
+    array.nth
+    $rhs
+    float.mod
     array.set
     pop
 @end
