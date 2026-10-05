@@ -2008,15 +2008,29 @@
 @end
 
 
-// ## @macro std::object_set <object> -> <field> = <rhs>
+// ## @macro std::object_set <object> -> <field> <operator> <rhs>
 //
 // ### Description
 // Mutates the named field in the object and leaves no value.
+//
+// = assigns any value without reading the previous value.
+//
+// +=, -=, *=, <<=, &=, |=, and ^= use generic Int/UInt operations, these
+// require that the value stored in the local and the new rhs value are of
+// the same type.
+//
+// Float values should use object_float_set instead.
+//
+// Compound assignment reads the old value before evaluating rhs once and combining
+// them with an operator to produce the new value.
+//
+// Use object_int_set or object_uint_set for /=, %=, and >>= (these are special non-generic).
 //
 // ### Arguments
 // <object>: An Object expression.
 // <arrow>: The required -> token.
 // <field>: The field in the form of object.field.
+// <operator>: =, +=, -=, *=, <<=, &=, |=, or ^=.
 // <rhs>: An expression producing any value.
 //
 @macro object_set (object, arrow, field, operator, rhs)
@@ -2024,6 +2038,289 @@
     @matches operator ^=$
     $object
     $rhs
+    object.set $field
+    pop
+@end
+
+@macro object_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^-=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    numeric.sub
+    object.set $field
+    pop
+@end
+
+@macro object_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^\*=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    numeric.mul
+    object.set $field
+    pop
+@end
+
+@macro object_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^<<=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    numeric.shift.left
+    object.set $field
+    pop
+@end
+
+@macro object_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^&=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    bitwise.and
+    object.set $field
+    pop
+@end
+
+@macro object_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^\|=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    bitwise.or
+    object.set $field
+    pop
+@end
+
+@macro object_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^\^=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    bitwise.xor
+    object.set $field
+    pop
+@end
+
+
+// ## @macro std::object_int_set <object> -> <field> <operator> <rhs>
+//
+// ### Description
+// Performs Int assignment or compound assignment on an existing object field that should
+// be of the Int type.
+//
+// This forwards all of the underlying `std::object_set` operations, and allows for the usage
+// of >>=, %= and /= too.
+//
+// ### Arguments
+// <object>: An Object expression.
+// <arrow>: The required -> token.
+// <field>: The field in the form of object.field.
+// <operator>:  Base `std::object_set` operators, and >>=, %= or /=.
+// <rhs>: An expression producing any value.
+//
+@macro object_int_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^(=|\+=|-=|\*=|<<=|&=|\|=|\^=)$
+    !std::object_set { 
+        $object 
+    } $arrow $field $operator { 
+        $rhs 
+    }
+@end
+
+@macro object_int_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^/=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    int.div
+    object.set $field
+    pop
+@end
+
+@macro object_int_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^%=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    int.mod
+    object.set $field
+    pop
+@end
+
+@macro object_int_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^>>=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    int.shift.right
+    object.set $field
+    pop
+@end
+
+// ## @macro std::object_uint_set <object> -> <field> <operator> <rhs>
+//
+// ### Description
+// Performs UInt assignment or compound assignment on an existing object field that should
+// be of the UInt type.
+//
+// This forwards all of the underlying `std::object_set` operations, and allows for the usage
+// of >>=, %= and /= too.
+//
+// ### Arguments
+// <object>: An Object expression.
+// <arrow>: The required -> token.
+// <field>: The field in the form of object.field.
+// <operator>:  Base `std::object_set` operators, and >>=, %= or /=.
+// <rhs>: An expression producing any value.
+//
+@macro object_uint_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^(=|\+=|-=|\*=|<<=|&=|\|=|\^=)$
+    !std::object_set { 
+        $object 
+    } $arrow $field $operator { 
+        $rhs 
+    }
+@end
+
+@macro object_uint_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^/=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    uint.div
+    object.set $field
+    pop
+@end
+
+@macro object_uint_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^%=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    uint.mod
+    object.set $field
+    pop
+@end
+
+@macro object_uint_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^>>=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    uint.shift.right
+    object.set $field
+    pop
+@end
+
+// ## @macro std::object_float_set <object> -> <field> <operator> <rhs>
+//
+// ### Description
+// Performs Float assignment or compound assignment on an existing object field that should
+// be of the Float type.
+//
+// This permits for the operations of =, +=, -=, *=, /=, %=, where = is the same
+// underlying `std::object_set` operation.
+//
+// ### Arguments
+// <object>: An Object expression.
+// <arrow>: The required -> token.
+// <field>: The field in the form of object.field.
+// <operator>: =, +=, -=, *=, /= or %=.
+// <rhs>: An expression producing any value.
+//
+@macro object_float_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^(=)$
+    !std::object_set { 
+        $object 
+    } $arrow $field $operator { 
+        $rhs 
+    }
+@end
+
+@macro object_float_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^\+=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    float.add
+    object.set $field
+    pop
+@end
+
+@macro object_float_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^-=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    float.sub
+    object.set $field
+    pop
+@end
+
+@macro object_float_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^\*=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    float.mul
+    object.set $field
+    pop
+@end
+
+@macro object_float_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^/=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    float.div
+    object.set $field
+    pop
+@end
+
+@macro object_float_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
+    @matches operator ^%=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    float.mod
     object.set $field
     pop
 @end
