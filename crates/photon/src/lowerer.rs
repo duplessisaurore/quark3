@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use crate::{
     ast::{
-        Expression, FunctionDeclaration, Located, Module, ObjectDeclaration, Parameter,
+        Expression, FunctionDeclaration, Located, MethodName, Module, ObjectDeclaration, Parameter,
         QualifiedName, SimpleStatement, SourceSpan, Statement, TopLevelItem, TypeName,
     },
     errors::{PhotonErrorKind, PhotonResult, TypeMismatchSource},
@@ -34,6 +34,22 @@ pub struct LoweredModule {
 struct LoweredExpression {
     code: String,
     value_type: TypeName,
+}
+
+/// Intrinsics, these lower directly as some function
+/// call to a std.b3 construct.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+enum Intrinsic {
+    Clone,
+    TypeOf,
+    Drop,
+    Assert,
+    IntToFloat,
+    UIntToFloat,
+    FloatToInt,
+    FloatToUInt,
+    IntToUInt,
+    UIntToInt,
 }
 
 /// The context of a function,
@@ -142,6 +158,19 @@ impl LoweredExpression {
                     found: self.value_type.clone(),
                     source,
                 },
+                span,
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validates that this lowered expression has some value,
+    /// otherwise errors
+    fn expect_value(&self, span: SourceSpan, source: TypeMismatchSource) -> PhotonResult<()> {
+        if !self.produces_value() {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::ExpressionDidNotProduceValue { source },
                 span,
             ));
         }
@@ -299,6 +328,15 @@ impl SymbolTable {
             return_type: function.return_type.canonicalise(namespace),
         };
 
+        // Can't be in the object table already under the exact same name,
+        // as else we have duplicate callables and call cant resolve which
+        if self.objects.contains_key(&name) {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::DuplicateCallable { name },
+                decl_span,
+            ));
+        }
+
         // Functions cannot be duplicates.
         if self.functions.insert(name.clone(), signature).is_some() {
             return Err(PhotonErrorKind::error(
@@ -339,6 +377,15 @@ impl SymbolTable {
                 })
                 .collect(),
         };
+
+        // Can't be in the function table already under the exact same name,
+        // as else we have duplicate callables and call cant resolve which
+        if self.functions.contains_key(&name) {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::DuplicateCallable { name },
+                decl_span,
+            ));
+        }
 
         // objects cannot be duplicates.
         if self.objects.insert(name.clone(), signature).is_some() {
@@ -466,9 +513,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         // convert statement type to specific string code ver
         let code = match &statement.value {
             Statement::Simple(simple_statement) => todo!(),
-            Statement::Return { value } => {
-                self.lower_return_statement(value, span, context)?  
-            },
+            Statement::Return { value } => self.lower_return_statement(value, span, context)?,
             Statement::If {
                 condition,
                 then_body,
@@ -733,35 +778,187 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         span: SourceSpan,
         context: &FunctionContext,
     ) -> PhotonResult<String> {
-        match (value, &context.ret_type) {
-            // no return, no expected return
-            (None, TypeName::Void) => Ok("!std::return_void".to_owned()),
+        // If the return statement does not produce an expression
+        let Some(expression) = value else {
+            // And we don't expect anything, return void!
+            if context.ret_type == TypeName::Void {
+                return Ok("!std::return_void".to_owned());
+            }
 
-            // no return, expected return
-            (None, expected_type) => Err(PhotonErrorKind::error(
-                PhotonErrorKind::NoReturnExpectedReturn {
-                    expected: expected_type.clone(),
-                },
-                span,
-            )),
-
-            // some return, no expected return
-            (Some(_), TypeName::Void) => Err(PhotonErrorKind::error(
+            // Otherwise error since we did not produce any value for this non-void function
+            return Err(PhotonErrorKind::error(
                 PhotonErrorKind::ReturnInVoidFn,
                 span,
-            )),
+            ));
+        };
 
-            // some return, expected return
-            (Some(value), expected_type) => {
-                let lowered_value = self.expect_lowered_expression_type(
-                    value,
-                    expected_type,
-                    context,
-                    TypeMismatchSource::ReturnValue,
-                )?;
-                Ok(format!("!std::return {}", block(&lowered_value.code)))
-            }
+        // Check if this is a tail call that we can lower, and return that
+        if let Some(tail_call) = self.lower_tail_call(expression, &context.ret_type, context)? {
+            return Ok(tail_call);
         }
+
+        // If it wasn't a tail call then consider the normal return case for
+        // this expression.
+        if context.ret_type == TypeName::Void {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::NoReturnExpectedReturn {
+                    expected: context.ret_type.clone(),
+                },
+                span,
+            ));
+        }
+
+        // get the lowered expr, should match function ret type
+        let lowered = self.expect_lowered_expression_type(
+            expression,
+            &context.ret_type,
+            context,
+            TypeMismatchSource::ReturnValue,
+        )?;
+
+        Ok(format!("!std::return {}", block(&lowered.code),))
+    }
+
+    /// Attempts to lower an expression in return position as a tail call.
+    /// returns an option dictating whether or not it could (with the produced code)
+    fn lower_tail_call(
+        &self,
+        expression: &Located<Expression>,
+        expected_return_type: &TypeName,
+        context: &FunctionContext,
+    ) -> PhotonResult<Option<String>> {
+        match &expression.value {
+            Expression::Call { callee, arguments } => {
+                let Expression::Name(function_name) = &callee.value else {
+                    // we don't handle name producing expressions such as
+                    // (function_name)(args), for simplicity. as this would be pretty annoying
+                    // to manually consider here, lol just use proper calls.
+                    return Ok(None);
+                };
+
+                // intrinsics which we cant directly call
+                if resolve_intrinsic(function_name).is_some() {
+                    return Ok(None);
+                }
+
+                // resolve to underlying function
+                let resolved_name = function_name.resolve(&self.module.namespace);
+
+                // if this is a call to an object constructor, then we cant tail call to it because
+                // its not a proper tail callable thing (object.new vs call)
+                if self.symbols.object(&resolved_name).is_some() {
+                    return Ok(None);
+                }
+
+                // resolve the signature of this function
+                let signature = self.symbols.function(&resolved_name).ok_or_else(|| {
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::UnknownFunction {
+                            name: resolved_name.clone(),
+                        },
+                        expression.span,
+                    )
+                })?;
+
+                // Tail-calling will bypass our normalisation of void/non-void with drops,
+                // so make sure the types agree (e.g we don't drop a non-void thing).
+                if !tail_return_shape_matches(expected_return_type, &signature.return_type) {
+                    return Ok(None);
+                }
+
+                // ensure argument count matches else error
+                expect_argument_count(
+                    signature.parameters.len(),
+                    arguments.len(),
+                    expression.span,
+                )?;
+
+                // lower and tailcall
+                let arguments = self.lower_arguments(arguments, context, TypeMismatchSource::TailCallArguments)?;
+                Ok(Some(format!(
+                    "!std::tailcall {resolved_name} ( {} )",
+                    lowered_exprs_block(&arguments),
+                )))
+            }
+
+            Expression::MethodCall {
+                receiver,
+                method,
+                arguments,
+            } => {
+                // lower the reciever down into its actual producing code
+                let receiver = self.expect_lowered_expression_value(
+                    receiver,
+                    context,
+                    TypeMismatchSource::TailCallMethodReciever,
+                )?;
+
+                // Inferred Array methods are std.b3 array operations
+                // these cannot be tail called as they are special macros intead
+                // and i dont feel like changing it grrrrr
+                if receiver.value_type == TypeName::Array
+                    && matches!(method, MethodName::Inferred(_))
+                {
+                    return Ok(None);
+                }
+
+                // resolve the full method name from the type and method
+                let method_name =
+                    self.resolve_method_name(&receiver.value_type, method, expression.span)?;
+
+                // get the signature of this method
+                let signature = self.symbols.function(&method_name).ok_or_else(|| {
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::UnknownMethod {
+                            name: method_name.clone(),
+                            method_type: receiver.value_type,
+                        },
+                        expression.span,
+                    )
+                })?;
+
+                // Tail-calling will bypass our normalisation of void/non-void with drops,
+                // so make sure the types agree (e.g we don't drop a non-void thing).
+                if !tail_return_shape_matches(expected_return_type, &signature.return_type) {
+                    return Ok(None);
+                }
+
+                // The receiver is the first function argument, but it does not
+                // appear in the surface argument list.
+                let expected_argument_count = signature.parameters.len().saturating_sub(1);
+
+                // ensure the surface arg count matches the arg counts
+                expect_argument_count(expected_argument_count, arguments.len(), expression.span)?;
+
+                // lower and tailmethod
+                let arguments = self.lower_arguments(arguments, context, TypeMismatchSource::TailCallMethodArguments)?;
+
+                Ok(Some(format!(
+                    "!std::object_tailmethod {} -> {method_name} ( {} )",
+                    block(&receiver.code),
+                    lowered_exprs_block(&arguments),
+                )))
+            }
+
+            // not any call, cant be a tail call for us.
+            _ => Ok(None),
+        }
+    }
+
+    /// Lowers a set of argument expressions in a function context.
+    ///
+    /// This essentially lowers each argument expression, expecting it to contain
+    /// a value.
+    fn lower_arguments(
+        &self,
+        arguments: &[Located<Expression>],
+        context: &FunctionContext,
+        source: TypeMismatchSource,
+    ) -> PhotonResult<Vec<LoweredExpression>> {
+        arguments
+            .iter()
+            .map(|argument| self.expect_lowered_expression_value(argument, context, source))
+            .collect()
     }
 
     /// Lowers an expression with a certain type involved.
@@ -775,6 +972,69 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         context: &FunctionContext,
         source: TypeMismatchSource,
     ) -> PhotonResult<LoweredExpression> {
+        let lowered = self.lower_expression(expression, context)?;
+        lowered.expect_type(expression.span, expected_type, source)?;
+        Ok(lowered)
+    }
+
+    /// Lowers an expression where the expression must return a value (non-void).
+    fn expect_lowered_expression_value(
+        &self,
+        expression: &Located<Expression>,
+        context: &FunctionContext,
+        source: TypeMismatchSource,
+    ) -> PhotonResult<LoweredExpression> {
+        let lowered = self.lower_expression(expression, context)?;
+        lowered.expect_value(expression.span, source)?;
+        Ok(lowered)
+    }
+
+    /// Resolves a to-be method on a reciever of some type down into the real
+    /// function name in its associated namespace.
+    ///
+    /// The span should be where this resolution is being attempted
+    ///
+    /// We assume that say for some std::queue::Queue method peek(),
+    /// it exists under std::queue::peek()
+    fn resolve_method_name(
+        &self,
+        receiver_type: &TypeName,
+        method: &MethodName,
+        span: SourceSpan,
+    ) -> PhotonResult<QualifiedName> {
+        match method {
+            // A fully qualified name has no resolution to be done.
+            MethodName::Qualified(name) => Ok(name.resolve(&self.module.namespace)),
+
+            // Infer from method name (under its namespace)
+            MethodName::Inferred(method_name) => {
+                // must be an object
+                let object_name = receiver_type.object_name().ok_or_else(|| {
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::InferringMethodOnNonObjectType {
+                            method_name: method_name.to_string(),
+                            reciever_type: receiver_type.clone(),
+                        },
+                        span,
+                    )
+                })?;
+
+                // method name exists under this namespace
+                let namespace: QualifiedName = object_name.namespace().ok_or_else(|| {
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::InferringMethodOnObjectWithoutNamespace {
+                            object_name: object_name.clone(),
+                        },
+                        span,
+                    )
+                })?;
+
+                // rebuild with method name
+                let mut segments = namespace.segments;
+                segments.push(method_name.clone());
+                Ok(QualifiedName::new(segments))
+            }
+        }
     }
 
     /// Declares a local of some `name` in the current `context` of the function,
@@ -823,4 +1083,81 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 /// {contents}
 fn block(contents: &str) -> String {
     format!("{{ {contents} }}")
+}
+
+/// Converts a set of `LoweredExpression`'s to
+/// a block.
+fn lowered_exprs_block(exprs: &[LoweredExpression]) -> String {
+    if exprs.is_empty() {
+        return "{}".to_owned();
+    }
+
+    let contents = exprs
+        .iter()
+        .map(|value| value.code.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    block(&contents)
+}
+
+/// Tries to resolve a qualified name as a call to some `Intrinsic`,
+/// returns Some(Intrinsic) if it can be resolved.
+///
+/// Allowed intrinsics have no namespace or are under std::
+fn resolve_intrinsic(name: &QualifiedName) -> Option<Intrinsic> {
+    // Name must be unqualified (no namespace)
+    // and a direct call for intrinsic to map.
+    let name = if name.is_unqualified() {
+        name.last()
+    } else if name
+        .segments
+        .first()
+        .is_some_and(|segment| segment == "std")
+    {
+        // std is also allowed
+        name.last()
+    } else {
+        return None;
+    };
+
+    // map to actual intrinsic underlying call
+    match name {
+        "clone" => Some(Intrinsic::Clone),
+        "type" => Some(Intrinsic::TypeOf),
+        "drop" => Some(Intrinsic::Drop),
+        "assert" => Some(Intrinsic::Assert),
+        "int_to_float" => Some(Intrinsic::IntToFloat),
+        "uint_to_float" => Some(Intrinsic::UIntToFloat),
+        "float_to_int" => Some(Intrinsic::FloatToInt),
+        "float_to_uint" => Some(Intrinsic::FloatToUInt),
+        "int_to_uint" => Some(Intrinsic::IntToUInt),
+        "uint_to_int" => Some(Intrinsic::UIntToInt),
+        _ => None,
+    }
+}
+
+/// Returns whether or not the shape (that is whether or not
+/// we actually expect a value) matches from this function.
+fn tail_return_shape_matches(caller_return_type: &TypeName, callee_return_type: &TypeName) -> bool {
+    let caller_is_void = caller_return_type == &TypeName::Void;
+    let callee_is_void = callee_return_type == &TypeName::Void;
+
+    caller_is_void == callee_is_void
+}
+
+/// Ensures that the expected number of arguments
+/// matches the actual nubmer of arguments, erroring otherwise.
+fn expect_argument_count(expected: usize, actual: usize, span: SourceSpan) -> PhotonResult<()> {
+    if expected == actual {
+        Ok(())
+    } else {
+        Err(PhotonErrorKind::error(
+            PhotonErrorKind::NumArgumentCallMismatch {
+                expected,
+                found: actual,
+            },
+            span,
+        ))
+    }
 }

@@ -93,6 +93,10 @@ pub enum PhotonErrorKind {
     /// A duplicate object was declared with this name!
     DuplicateObject { name: QualifiedName },
 
+    /// An overlapping callable, either an object or a function
+    /// was obth declared with the same name!
+    DuplicateCallable { name: QualifiedName },
+
     /// A type mismatch error occured during the lowering phase.
     TypeMismatchSource {
         expected: TypeName,
@@ -113,6 +117,37 @@ pub enum PhotonErrorKind {
 
     /// void fn, any nonvoid return expr
     ReturnInVoidFn,
+
+    /// Attempted to call a function with an unknown name
+    UnknownFunction { name: QualifiedName },
+
+    /// Attempted to call a method with an unknown name
+    UnknownMethod { name: QualifiedName, method_type: TypeName },
+
+    /// Attempted to call a function with an invalid nubmer
+    /// of arguments!
+    ///
+    /// (the vm does handle this but comptime errors are better)
+    NumArgumentCallMismatch { expected: usize, found: usize },
+
+    /// Inferring methods on non object types are not permitted
+    /// because they do not belong to a namespace
+    InferringMethodOnNonObjectType {
+        method_name: String,
+        reciever_type: TypeName
+    },
+
+    /// No namespace for an object, which means we cant figure
+    /// out what namespace to look for, for methods!
+    InferringMethodOnObjectWithoutNamespace {
+        object_name: QualifiedName
+    },
+
+    /// An expression in a position which is expected to produce
+    /// a value did not in fact produce a value
+    ExpressionDidNotProduceValue {
+        source: TypeMismatchSource
+    }
 }
 
 /// Located version of `PhotonErrorKind` w source span info
@@ -284,6 +319,33 @@ impl Display for PhotonErrorKind {
                     "function has declared return type of `Void`, so `return` must NOT return any value`"
                 )
             }
+            Self::DuplicateCallable { name } => {
+                write!(
+                    f,
+                    "Attempted to declare a function or a object under the name `{name}`, however an existing function/object already exists under the same name! because the object constructor is a call it's impossible to resolve this, so this callable case is illegal!"
+                )
+            }
+            Self::UnknownFunction { name } => {
+                write!(f, "found reference to unknown function `{name}`")
+            }
+            Self::NumArgumentCallMismatch { expected, found } => {
+                write!(f, "expected {expected} arguments, received {found}")
+            }
+            Self::UnknownMethod { name, method_type } => {
+                write!(f, "found reference to unknown method `{name}` on type `{method_type}`")
+            }
+            Self::InferringMethodOnNonObjectType { method_name, reciever_type } => {
+                write!(f, "cannot infer method `{method_name}` because receiver type is `{reciever_type}` and is not a valid object-based type!")
+            }
+            Self::InferringMethodOnObjectWithoutNamespace { object_name } => {
+                write!(f, "cannot infer method name on object type `{object_name}` because it has no namespace for method lookup")
+            }
+            Self::ExpressionDidNotProduceValue { source }=> {
+                write!(
+                    f,
+                    "expected expression in position of `{source}` to produce a value, but it did not!"
+                )
+            }
         }
     }
 }
@@ -316,6 +378,15 @@ pub enum TypeMismatchSource {
 
     /// The value returned by a `return`
     ReturnValue,
+
+    /// The value used in a tail-call with a method on a reciever position
+    TailCallMethodReciever,
+
+    /// In the position of a normal tail call arguments
+    TailCallArguments,
+
+    /// In the position of a method tail call arguments
+    TailCallMethodArguments,
 }
 
 impl Display for TypeMismatchSource {
@@ -338,6 +409,15 @@ impl Display for TypeMismatchSource {
             }
             TypeMismatchSource::ReturnValue => {
                 write!(f, "The expression of a return statement")
+            }
+            TypeMismatchSource::TailCallMethodReciever => {
+                write!(f, "The reciever of a method in a tail call position")
+            }
+            TypeMismatchSource::TailCallArguments => {
+                write!(f, "The arguments to a tail call")
+            }
+            TypeMismatchSource::TailCallMethodArguments => {
+                write!(f, "The arguments to a tail call on an object method")
             }
         }
     }
