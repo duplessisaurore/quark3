@@ -88,6 +88,7 @@ impl fmt::Display for TypeName {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
     pub items: Vec<Located<TopLevelItem>>,
+    pub namespace: QualifiedName,
 }
 
 /// All the possible top level items in a module of photon3 source code
@@ -499,17 +500,6 @@ impl QualifiedName {
 impl fmt::Display for QualifiedName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}", self.segments.join("::"))
-    }
-}
-
-impl Module {
-    /// Resolves and finds the namespace that is part of the module,
-    /// this is the full namespace of the module
-    pub fn namespace(&self) -> Option<&QualifiedName> {
-        self.items.iter().find_map(|item| match &item.value {
-            TopLevelItem::Namespace(namespace) => Some(namespace),
-            _ => None,
-        })
     }
 }
 

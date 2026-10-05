@@ -4,7 +4,7 @@
 use std::fmt::Display;
 
 use crate::{
-    ast::{Located, SourceSpan},
+    ast::{Located, QualifiedName, SourceSpan, TypeName},
     lexer::TokenKind,
 };
 
@@ -83,6 +83,22 @@ pub enum PhotonErrorKind {
 
     /// No namespace was delcared in the module!
     NoNamespace,
+
+    /// A duplicate global was declared with this name!
+    DuplicateGlobal { name: QualifiedName },
+
+    /// A duplicate function was declared with this name!
+    DuplicateFunction { name: QualifiedName },
+
+    /// A duplicate object was declared with this name!
+    DuplicateObject { name: QualifiedName },
+
+    /// A type mismatch error occured during the lowering phase.
+    TypeMismatchSource {
+        expected: TypeName,
+        found: TypeName,
+        source: TypeMismatchSource,
+    },
 }
 
 /// Located version of `PhotonErrorKind` w source span info
@@ -204,6 +220,34 @@ impl Display for PhotonErrorKind {
             Self::NoNamespace => {
                 write!(f, "unexpectedly found no namespace delcarations in file")
             }
+            Self::DuplicateGlobal { name } => {
+                write!(
+                    f,
+                    "multiple definitions of the global with the qualified name `{name}` were found!"
+                )
+            }
+            Self::DuplicateFunction { name } => {
+                write!(
+                    f,
+                    "multiple definitions of the function with the qualified name `{name}` were found!"
+                )
+            }
+            Self::DuplicateObject { name } => {
+                write!(
+                    f,
+                    "multiple definitions of the object with the qualified name `{name}` were found!"
+                )
+            }
+            Self::TypeMismatchSource {
+                expected,
+                found,
+                source,
+            } => {
+                write!(
+                    f,
+                    "expected to recieve type of `{expected}` in {source}, received `{found}`"
+                )
+            }
         }
     }
 }
@@ -213,5 +257,34 @@ impl Display for PhotonError {
         let actual_error_kind = &self.value;
         let actual_error_span = &self.span;
         write!(f, "{actual_error_kind} at byte range {actual_error_span}")
+    }
+}
+
+/// Sources of type mistmatches down
+#[derive(Debug, Clone, Copy)]
+pub enum TypeMismatchSource {
+    /// The foreach source must be of the type Array
+    ForEachArraySource,
+
+    /// The for condition must be of the type Bool
+    ForCondition,
+
+    /// The dowhile condition must be of the type bool
+    DoWhileCondition,
+}
+
+impl Display for TypeMismatchSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeMismatchSource::ForEachArraySource => {
+                write!(f, "The source array of a foreach statement")
+            }
+            TypeMismatchSource::ForCondition => {
+                write!(f, "The condition of a for statement")
+            }
+            TypeMismatchSource::DoWhileCondition => {
+                write!(f, "The condition of a dowhile statement")
+            }
+        }
     }
 }

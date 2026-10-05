@@ -161,37 +161,46 @@ impl<'tokens> Parser<'tokens> {
         self.skip_newlines();
 
         // Validate namespace declaration for this module.
-        let mut namespace_declared = false;
+        let mut namespace_declared: Option<_> = None;
 
         while !self.is_at_end() {
-            items.push(match self.parse_top_level_item()? {
-                namespace @ Located {
-                    value: TopLevelItem::Namespace(_),
+            let item = self.parse_top_level_item()?;
+
+            // Check item for potential conflicts/duplicates
+            match &item {
+                Located {
+                    value: TopLevelItem::Namespace(qualified_namespace),
                     ..
                 } => {
-                    if namespace_declared {
+                    // duplicate namespace
+                    if namespace_declared.is_some() {
                         return Err(PhotonErrorKind::error(
                             PhotonErrorKind::DuplicateNamespace,
                             self.previous_span(),
                         ));
                     }
 
-                    namespace_declared = true;
-                    namespace
+                    namespace_declared = Some(qualified_namespace.clone());
                 }
-                rest => rest,
-            });
+                _ => {}
+            };
+
+            items.push(item);
             self.skip_newlines();
         }
 
-        if !namespace_declared {
+        // extract namespace decl
+        let Some(module_namespace) = namespace_declared else {
             return Err(PhotonErrorKind::error(
                 PhotonErrorKind::NoNamespace,
                 self.previous_span(),
             ));
-        }
+        };
 
-        Ok(Module { items })
+        Ok(Module {
+            items,
+            namespace: module_namespace,
+        })
     }
 
     /// Repeatedly skips newline tokens until the first non-newline token.
