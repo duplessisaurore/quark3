@@ -44,7 +44,6 @@ pub enum TokenKind {
     // sugar we build for the std.b3 sugar layer
     Let,
     Return,
-    TailCall,
     If,
     Else,
     While,
@@ -699,7 +698,6 @@ impl<'src> Lexer<'src> {
             "false" => TokenKind::BoolLiteral(false),
             "let" => TokenKind::Let,
             "return" => TokenKind::Return,
-            "tailcall" => TokenKind::TailCall,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "while" => TokenKind::While,
@@ -922,7 +920,6 @@ impl TokenKind {
         match self {
             Self::Let => "let",
             Self::Return => "return",
-            Self::TailCall => "tailcall",
             Self::If => "if",
             Self::Else => "else",
             Self::While => "while",

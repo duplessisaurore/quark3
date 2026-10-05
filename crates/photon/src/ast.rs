@@ -176,9 +176,6 @@ pub enum Statement {
     Return {
         value: Option<Located<Expression>>,
     },
-    TailCall {
-        call: Located<Expression>,
-    },
     If {
         condition: Located<Expression>,
         then_body: Vec<Located<Statement>>,

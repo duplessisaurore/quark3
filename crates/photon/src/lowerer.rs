@@ -466,26 +466,31 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         // convert statement type to specific string code ver
         let code = match &statement.value {
             Statement::Simple(simple_statement) => todo!(),
-            Statement::Return { value } => todo!(),
-            Statement::TailCall { call } => todo!(),
+            Statement::Return { value } => {
+                self.lower_return_statement(value, span, context)?  
+            },
             Statement::If {
                 condition,
                 then_body,
                 else_body,
-            } => todo!(),
-            Statement::While { condition, body } => todo!(),
-            Statement::DoWhile { body, condition } => todo!(),
+            } => self.lower_if_statement(condition, then_body, else_body, context)?,
+            Statement::While { condition, body } => {
+                self.lower_while_statement(condition, body, context)?
+            }
+            Statement::DoWhile { body, condition } => {
+                self.lower_dowhile_statement(body, condition, context)?
+            }
             Statement::For {
                 initializer,
                 condition,
                 step,
                 body,
-            } => todo!(),
+            } => self.lower_for_statement(initializer, condition, step, body, context)?,
             Statement::ForEach {
                 binding,
                 array,
                 body,
-            } => todo!(),
+            } => self.lower_foreach_statement(span, binding, array, body, context)?,
             Statement::Loop { body } => self.lower_loop_statement(body, context)?,
             Statement::Break => "!std::break".to_string(),
             Statement::Continue => "!std::continue".to_string(),
@@ -658,6 +663,107 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         ))
     }
 
+    /// Lowers a while statement in the current function context,
+    fn lower_while_statement(
+        &self,
+        condition: &Located<Expression>,
+        body: &Vec<Located<Statement>>,
+        context: &mut FunctionContext,
+    ) -> PhotonResult<String> {
+        // condition should be of type bool
+        let condition = self.expect_lowered_expression_type(
+            condition,
+            &TypeName::Bool,
+            context,
+            TypeMismatchSource::WhileCondition,
+        )?;
+
+        // body
+        let body = self.lower_statement_block(body, context)?;
+
+        Ok(format!(
+            "!std::while ( {} ) {}",
+            block(&condition.code),
+            block(&body)
+        ))
+    }
+
+    /// Lowers an if statement in the current function context,
+    fn lower_if_statement(
+        &self,
+        condition: &Located<Expression>,
+        then_body: &Vec<Located<Statement>>,
+        else_body: &Option<Vec<Located<Statement>>>,
+        context: &mut FunctionContext,
+    ) -> PhotonResult<String> {
+        // condition should be of type bool
+        let condition = self.expect_lowered_expression_type(
+            condition,
+            &TypeName::Bool,
+            context,
+            TypeMismatchSource::IfCondition,
+        )?;
+
+        // body
+        let then_body = self.lower_statement_block(then_body, context)?;
+
+        // whether or not there's an else
+        Ok(if let Some(else_body) = else_body {
+            // body of else
+            let else_body = self.lower_statement_block(else_body, context)?;
+            format!(
+                "!std::if_else ( {} ) {} else {}",
+                block(&condition.code),
+                block(&then_body),
+                block(&else_body)
+            )
+        } else {
+            format!(
+                "!std::if ( {} ) {}",
+                block(&condition.code),
+                block(&then_body)
+            )
+        })
+    }
+
+    /// Lowers a return statement in the current function context,
+    fn lower_return_statement(
+        &self,
+        value: &Option<Located<Expression>>,
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<String> {
+        match (value, &context.ret_type) {
+            // no return, no expected return
+            (None, TypeName::Void) => Ok("!std::return_void".to_owned()),
+
+            // no return, expected return
+            (None, expected_type) => Err(PhotonErrorKind::error(
+                PhotonErrorKind::NoReturnExpectedReturn {
+                    expected: expected_type.clone(),
+                },
+                span,
+            )),
+
+            // some return, no expected return
+            (Some(_), TypeName::Void) => Err(PhotonErrorKind::error(
+                PhotonErrorKind::ReturnInVoidFn,
+                span,
+            )),
+
+            // some return, expected return
+            (Some(value), expected_type) => {
+                let lowered_value = self.expect_lowered_expression_type(
+                    value,
+                    expected_type,
+                    context,
+                    TypeMismatchSource::ReturnValue,
+                )?;
+                Ok(format!("!std::return {}", block(&lowered_value.code)))
+            }
+        }
+    }
+
     /// Lowers an expression with a certain type involved.
     ///
     /// Expects that the lowered expression returns this type,
@@ -669,6 +775,38 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         context: &FunctionContext,
         source: TypeMismatchSource,
     ) -> PhotonResult<LoweredExpression> {
+    }
+
+    /// Declares a local of some `name` in the current `context` of the function,
+    /// this local is expected to have the type of `local_type`.
+    ///
+    /// The span is the location of which this declaration occurs at for invalid
+    /// redeclaration to another type.
+    fn declare_local(
+        &self,
+        name: &str,
+        local_type: TypeName,
+        span: SourceSpan,
+        context: &mut FunctionContext,
+    ) -> PhotonResult<()> {
+        // check if previous declaration exists with some type
+        // for type mismatch
+        if let Some(previous_type) = context.locals.get(name) {
+            if previous_type != &local_type {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::LocalRedeclarationWithDifferentType {
+                        original: previous_type.clone(),
+                        new: local_type,
+                        name: name.to_string(),
+                    },
+                    span,
+                ));
+            }
+            return Ok(());
+        }
+
+        context.locals.insert(name.to_owned(), local_type);
+        Ok(())
     }
 
     /// Outputs one lowered string from some code and a span that

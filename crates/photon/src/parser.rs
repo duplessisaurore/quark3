@@ -643,7 +643,6 @@ impl<'tokens> Parser<'tokens> {
     fn parse_statement(&mut self) -> PhotonResult<Located<Statement>> {
         match self.peek_token().map(|tok| &tok.value) {
             Some(TokenKind::Return) => self.parse_return_statement(),
-            Some(TokenKind::TailCall) => self.parse_tail_call_statement(),
             Some(TokenKind::If) => self.parse_if_statement(),
             Some(TokenKind::While) => self.parse_while_statement(),
             Some(TokenKind::Do) => self.parse_do_statement(),
@@ -684,21 +683,6 @@ impl<'tokens> Parser<'tokens> {
 
         // build final ret statement
         let statement = Located::new(Statement::Return { value }, (start..end).into());
-
-        self.require_statement_terminator()?;
-
-        Ok(statement)
-    }
-
-    /// Parses a tailcall statement
-    fn parse_tail_call_statement(&mut self) -> PhotonResult<Located<Statement>> {
-        // This is some call expr starting with "tailcall" proceeding it
-        let start = self.expect(&TokenKind::TailCall)?.span.start;
-
-        let call = self.parse_expression()?;
-        let end = call.span.end;
-
-        let statement = Located::new(Statement::TailCall { call }, (start..end).into());
 
         self.require_statement_terminator()?;
 

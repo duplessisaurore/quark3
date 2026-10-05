@@ -99,6 +99,20 @@ pub enum PhotonErrorKind {
         found: TypeName,
         source: TypeMismatchSource,
     },
+
+    /// A local was re-declared with a seperate type to the previous
+    /// declaration, this is not allowed!
+    LocalRedeclarationWithDifferentType {
+        original: TypeName,
+        new: TypeName,
+        name: String,
+    },
+
+    /// void fn, void return expr
+    NoReturnExpectedReturn { expected: TypeName },
+
+    /// void fn, any nonvoid return expr
+    ReturnInVoidFn,
 }
 
 /// Located version of `PhotonErrorKind` w source span info
@@ -248,6 +262,28 @@ impl Display for PhotonErrorKind {
                     "expected to recieve type of `{expected}` in {source}, received `{found}`"
                 )
             }
+            Self::LocalRedeclarationWithDifferentType {
+                original,
+                new,
+                name,
+            } => {
+                write!(
+                    f,
+                    "local `{name}` was already declared as `{original}` and cannot be redeclared as `{new}`"
+                )
+            }
+            Self::NoReturnExpectedReturn { expected } => {
+                write!(
+                    f,
+                    "function has declared return type of `{expected}`, so `return` must return said type value"
+                )
+            }
+            Self::ReturnInVoidFn => {
+                write!(
+                    f,
+                    "function has declared return type of `Void`, so `return` must NOT return any value`"
+                )
+            }
         }
     }
 }
@@ -271,6 +307,15 @@ pub enum TypeMismatchSource {
 
     /// The dowhile condition must be of the type bool
     DoWhileCondition,
+
+    /// The while condition must be of the type bool
+    WhileCondition,
+
+    /// The if condition must be of the type bool
+    IfCondition,
+
+    /// The value returned by a `return`
+    ReturnValue,
 }
 
 impl Display for TypeMismatchSource {
@@ -284,6 +329,15 @@ impl Display for TypeMismatchSource {
             }
             TypeMismatchSource::DoWhileCondition => {
                 write!(f, "The condition of a dowhile statement")
+            }
+            TypeMismatchSource::WhileCondition => {
+                write!(f, "The condition of a while statement")
+            }
+            TypeMismatchSource::IfCondition => {
+                write!(f, "The condition of an if statement")
+            }
+            TypeMismatchSource::ReturnValue => {
+                write!(f, "The expression of a return statement")
             }
         }
     }
