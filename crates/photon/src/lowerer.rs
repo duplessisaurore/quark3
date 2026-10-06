@@ -8,7 +8,7 @@
 //! - resolving types (simply)
 //! - resolving whether things produce values or not and handling void appropriately with drop
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 use crate::{
     ast::{
@@ -32,7 +32,7 @@ pub struct LoweredModule {
 ///
 /// `Void` expressions must explicitly leave no values on the stack!
 /// everything else must produce the value desired by the type.
-struct LoweredExpression {
+pub struct LoweredExpression {
     code: String,
     value_type: TypeName,
 }
@@ -40,17 +40,14 @@ struct LoweredExpression {
 /// Intrinsics, these lower directly as some function
 /// call to a std.b3 construct.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-enum Intrinsic {
+pub enum Intrinsic {
     Clone,
     TypeOf,
     Drop,
     Assert,
-    IntToFloat,
-    UIntToFloat,
-    FloatToInt,
-    FloatToUInt,
-    IntToUInt,
-    UIntToInt,
+    ToFloat,
+    ToInt,
+    ToUInt,
 }
 
 /// The current "global/local/object" state of an assignment
@@ -139,7 +136,7 @@ impl LoweredExpression {
     ///
     /// A `Void` type expression is one which is assumed to produce no value
     /// on the stack.
-    fn value(code: impl Into<String>, value_type: TypeName) -> Self {
+    pub fn value(code: impl Into<String>, value_type: TypeName) -> Self {
         Self {
             code: code.into(),
             value_type,
@@ -148,7 +145,7 @@ impl LoweredExpression {
 
     /// Returns a lowered expresion that produces no value, essentially
     /// an expression of the Void type.
-    fn no_value(code: impl Into<String>) -> Self {
+    pub fn no_value(code: impl Into<String>) -> Self {
         Self::value(code, TypeName::Void)
     }
 
@@ -1110,6 +1107,8 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         expected_return_type: &TypeName,
         context: &FunctionContext,
     ) -> PhotonResult<Option<String>> {
+        let span = expression.span;
+
         match &expression.value {
             Expression::Call { callee, arguments } => {
                 let Expression::Name(function_name) = &callee.value else {
@@ -1156,12 +1155,16 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     expression.span,
                 )?;
 
-                // lower and tailcall
+                // lower arguments
                 let arguments = self.lower_arguments(
                     arguments,
                     context,
                     TypeMismatchSource::TailCallArguments,
                 )?;
+
+                // validate all argument types
+                signature.validate_arguments(span, &arguments)?;
+
                 Ok(Some(format!(
                     "!std::tailcall {resolved_name} ( {} )",
                     lowered_exprs_block(&arguments),
@@ -1224,6 +1227,9 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     TypeMismatchSource::TailCallMethodArguments,
                 )?;
 
+                // validate all argument types
+                signature.validate_method_arguments(span, &arguments)?;
+
                 Ok(Some(format!(
                     "!std::object_tailmethod {} -> {method_name} ( {} )",
                     block(&receiver.code),
@@ -1250,6 +1256,23 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             .iter()
             .map(|argument| self.expect_lowered_expression_value(argument, context, source.clone()))
             .collect()
+    }
+
+    /// Lowers exactly one argument expression in a function context.
+    ///
+    /// This essentially lowers the set, expecting only one argument expression back.
+    fn expect_lower_single_argument(
+        &self,
+        arguments: &[Located<Expression>],
+        span: SourceSpan,
+        context: &FunctionContext,
+        source: TypeMismatchSource,
+    ) -> PhotonResult<LoweredExpression> {
+        let lowered_args = self.lower_arguments(arguments, context, source)?;
+        expect_argument_count(1, lowered_args.len(), span)?;
+
+        // We know at least one exists safely
+        Ok(lowered_args.into_iter().next().unwrap())
     }
 
     /// Lowers an expression with a certain type involved.
@@ -1411,13 +1434,17 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             }
             Expression::Name(name) => self.lower_name_expr(name, span, context)?,
             Expression::ArrayLiteral(elements) => self.lower_array_lit_expr(elements, context)?,
-            Expression::Call { callee, arguments } => todo!(),
-            Expression::FieldAccess { receiver, field } => todo!(),
+            Expression::Call { callee, arguments } => {
+                self.lower_call_expr(callee, arguments, span, context)?
+            }
+            Expression::FieldAccess { receiver, field } => {
+                self.lower_field_access(receiver, field, span, context)?
+            },
             Expression::MethodCall {
                 receiver,
                 method,
                 arguments,
-            } => todo!(),
+            } => self.lower_method_call(receiver, method, arguments, span, context)?,
             Expression::Index { array, index } => todo!(),
             Expression::Unary { operator, operand } => todo!(),
             Expression::Binary {
@@ -1430,6 +1457,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 when_true,
                 when_false,
             } => todo!(),
+            Expression::Cast { expression, target_type } => todo!(),
             Expression::Boson3 {
                 declared_type,
                 body,
@@ -1511,15 +1539,409 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         ))
     }
 
-    // /// Lowers one call expression in the current context of a function
-    // fn lower_call_expr(
-    //     &self,
-    //     callee: &Located<Expression>,
-    //     arguments: &[Located<Expression>],
-    //     span: SourceSpan,
-    //     context: &FunctionContext,
-    // ) -> PhotonResult<LoweredExpression> {
-    // }
+    /// Lowers one call expression in the current context of a function
+    fn lower_call_expr(
+        &self,
+        callee: &Located<Expression>,
+        arguments: &[Located<Expression>],
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        // Calls are only permitted to straight up name callees (e.g) my_func()
+        let Expression::Name(callee_name) = &callee.value else {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::InvalidNonNameCallTarget,
+                span,
+            ));
+        };
+
+        // Validate if the call is an intrinsic or not, and lower it if it is.
+        if let Some(value) = self.lower_intrinsic_call(callee_name, arguments, span, context)? {
+            return Ok(value);
+        }
+
+        // Resolve it's name, so we can find out if its a function or object call.
+        let resolved_name = callee_name.resolve(&self.module.namespace);
+
+        // Object constructor
+        if let Some(object) = self.symbols.object(&resolved_name) {
+            expect_argument_count(object.fields.len(), arguments.len(), span)?;
+
+            // Lower all the arguments down to their expressions
+            let arguments = self.lower_arguments(
+                arguments,
+                context,
+                TypeMismatchSource::ObjectConstructorArguments {
+                    name: resolved_name.clone(),
+                },
+            )?;
+
+            // type check all arguments
+            for (index, ele) in arguments.iter().enumerate() {
+                // argument is to specific field at num
+                let (field_name, field_type) = &object.fields[index];
+
+                // validate type matches
+                ele.expect_type(
+                    span,
+                    &field_type,
+                    TypeMismatchSource::ObjectConstructorField {
+                        name: resolved_name.clone(),
+                        field: field_name.clone(),
+                    },
+                )?;
+            }
+
+            // actual constructor
+            return Ok(LoweredExpression::value(
+                format!(
+                    "!std::object_new {resolved_name} ( {} )",
+                    lowered_exprs_block(&arguments)
+                ),
+                TypeName::Object(resolved_name),
+            ));
+        }
+
+        // Not an object constructor, try see if its a function.
+        let signature = self.symbols.function(&resolved_name).ok_or_else(|| {
+            PhotonErrorKind::error(
+                PhotonErrorKind::UnknownCallable {
+                    name: resolved_name.clone(),
+                },
+                span,
+            )
+        })?;
+
+        // must match the argument count.
+        expect_argument_count(signature.parameters.len(), arguments.len(), span)?;
+
+        // lower all arguments down to their expressions
+        let arguments = self.lower_arguments(
+            arguments,
+            context,
+            TypeMismatchSource::FunctionCallArguments {
+                name: resolved_name.clone(),
+            },
+        )?;
+
+        // validate all argument types
+        signature.validate_arguments(span, &arguments)?;
+
+        // actual code for the call
+        let call_code = format!(
+            "!std::call {resolved_name} ( {} )",
+            lowered_exprs_block(&arguments)
+        );
+
+        Ok(signature.return_type.normalise_to_drop(&call_code))
+    }
+
+    /// Lowers a potential intrinsic call in the current context of a function
+    fn lower_intrinsic_call(
+        &self,
+        name: &QualifiedName,
+        arguments: &[Located<Expression>],
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<Option<LoweredExpression>> {
+        // Check and get the underlying intrinsic if this exists
+        let Some(intrinsic) = resolve_intrinsic(name) else {
+            return Ok(None);
+        };
+
+        // Argument to the intrinsic
+        let value = self.expect_lower_single_argument(
+            arguments,
+            span,
+            context,
+            TypeMismatchSource::IntrinsicArgument { intrinsic },
+        )?;
+
+        Ok(Some(match intrinsic {
+            // These dont have to check types
+            Intrinsic::Clone => LoweredExpression::value(
+                format!("!std::clone {}", block(&value.code)),
+                value.value_type,
+            ),
+            Intrinsic::TypeOf => LoweredExpression::value(
+                format!("!std::type {}", block(&value.code)),
+                TypeName::Tag,
+            ),
+            Intrinsic::Drop => {
+                LoweredExpression::no_value(format!("!std::drop {}", block(&value.code)))
+            }
+
+            // These do
+            Intrinsic::Assert => {
+                value.expect_type(span, &TypeName::Bool, TypeMismatchSource::AssertCondition)?;
+                LoweredExpression::no_value(format!("!std::assert ( {} )", block(&value.code)))
+            }
+            Intrinsic::ToFloat => {
+                // Get specific to_float macro from lhs type
+                let specific_macro = match value.value_type {
+                    TypeName::Int => "int_to_float",
+                    TypeName::UInt => "uint_to_float",
+                    _ => {
+                        return Err(PhotonErrorKind::error(
+                            PhotonErrorKind::InvalidTypeForConversionIntrinsic {
+                                intrinsic,
+                                found: value.value_type.clone(),
+                            },
+                            span,
+                        ));
+                    }
+                };
+
+                LoweredExpression::value(
+                    format!("!std::{specific_macro} {}", block(&value.code)),
+                    TypeName::Float,
+                )
+            }
+            Intrinsic::ToInt => {
+                // Get specific to_int macro from lhs type
+                let specific_macro = match value.value_type {
+                    TypeName::Float => "float_to_int",
+                    TypeName::UInt => "uint_to_int",
+                    _ => {
+                        return Err(PhotonErrorKind::error(
+                            PhotonErrorKind::InvalidTypeForConversionIntrinsic {
+                                intrinsic,
+                                found: value.value_type.clone(),
+                            },
+                            span,
+                        ));
+                    }
+                };
+
+                LoweredExpression::value(
+                    format!("!std::{specific_macro} {}", block(&value.code)),
+                    TypeName::Int,
+                )
+            }
+            Intrinsic::ToUInt => {
+                // Get specific to_int macro from lhs type
+                let specific_macro = match value.value_type {
+                    TypeName::Float => "float_to_uint",
+                    TypeName::Int => "int_to_uint",
+                    _ => {
+                        return Err(PhotonErrorKind::error(
+                            PhotonErrorKind::InvalidTypeForConversionIntrinsic {
+                                intrinsic,
+                                found: value.value_type.clone(),
+                            },
+                            span,
+                        ));
+                    }
+                };
+
+                LoweredExpression::value(
+                    format!("!std::{specific_macro} {}", block(&value.code)),
+                    TypeName::UInt,
+                )
+            }
+        }))
+    }
+
+    /// Lowers a method call in the current context of a function
+    fn lower_method_call(
+        &self,
+        receiver: &Located<Expression>,
+        method: &MethodName,
+        arguments: &[Located<Expression>],
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        // LHS of the method
+        let receiver = self.expect_lowered_expression_value(
+            receiver,
+            context,
+            TypeMismatchSource::MethodCallReceiver,
+        )?;
+
+        // Check if it's a special array method, which uses internal methods
+        // rather than calling a real method function
+        if matches!(method, MethodName::Inferred(_)) {
+            if let Some(array_method) =
+                self.lower_array_method(&receiver, method, arguments, span, context)?
+            {
+                return Ok(array_method);
+            }
+        }
+
+        // Resolve the method name down to find the function signature
+        let method_name = self.resolve_method_name(&receiver.value_type, method, span)?;
+        let signature = self.symbols.function(&method_name).ok_or_else(|| {
+            PhotonErrorKind::error(
+                PhotonErrorKind::UnknownMethod {
+                    name: method_name.clone(),
+                    method_type: receiver.value_type,
+                },
+                span,
+            )
+        })?;
+
+        // Make sure the argument count matches and lower the arguments to exprs
+        expect_argument_count(
+            signature.parameters.len().saturating_sub(1),
+            arguments.len(),
+            span,
+        )?;
+
+        let arguments = self.lower_arguments(
+            arguments,
+            context,
+            TypeMismatchSource::FunctionCallArguments {
+                name: method_name.clone(),
+            },
+        )?;
+
+        // validate argument types
+        signature.validate_method_arguments(span, &arguments)?;
+
+        // Actual code to call the method
+        let call_code = format!(
+            "!std::object_method {} -> {method_name} ( {} )",
+            block(&receiver.code),
+            lowered_exprs_block(&arguments)
+        );
+
+        Ok(signature.return_type.normalise_to_drop(&call_code))
+    }
+
+    /// Lowers a potential array method call in the current context of a function
+    fn lower_array_method(
+        &self,
+        receiver: &LoweredExpression,
+        method: &MethodName,
+        arguments: &[Located<Expression>],
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<Option<LoweredExpression>> {
+        // Reciever type must be an array
+        if receiver.value_type != TypeName::Array {
+            return Ok(None);
+        }
+
+        // And it must be a inferred method (array is under no namespace)
+        let MethodName::Inferred(method_name) = method else {
+            return Ok(None);
+        };
+
+        // match specific macro to inferred call
+        let result = match method_name.as_str() {
+            "length" => {
+                expect_argument_count(0, arguments.len(), span)?;
+                LoweredExpression::value(
+                    format!("!std::array_length {}", block(&receiver.code)),
+                    TypeName::UInt,
+                )
+            }
+            "head" => {
+                expect_argument_count(0, arguments.len(), span)?;
+                LoweredExpression::value(
+                    format!("!std::array_head {}", block(&receiver.code)),
+                    TypeName::Any,
+                )
+            }
+            "tail" => {
+                expect_argument_count(0, arguments.len(), span)?;
+                LoweredExpression::value(
+                    format!("!std::array_tail {}", block(&receiver.code)),
+                    TypeName::Array,
+                )
+            }
+            "append" => {
+                expect_argument_count(1, arguments.len(), span)?;
+
+                // Should have another array we are appending to us with
+                let other = self.expect_lowered_expression_type(
+                    &arguments[0],
+                    &TypeName::Array,
+                    context,
+                    TypeMismatchSource::ArrayAppendArgument,
+                )?;
+
+                LoweredExpression::value(
+                    format!(
+                        "!std::array_append {} {}",
+                        block(&receiver.code),
+                        block(&other.code)
+                    ),
+                    TypeName::Array,
+                )
+            }
+            "prepend" => {
+                let value = self.expect_lower_single_argument(
+                    arguments,
+                    span,
+                    context,
+                    TypeMismatchSource::ArrayPrependArgument,
+                )?;
+
+                LoweredExpression::value(
+                    format!(
+                        "!std::array_prepend {} {}",
+                        block(&receiver.code),
+                        block(&value.code)
+                    ),
+                    TypeName::Array,
+                )
+            }
+            _ => return Ok(None),
+        };
+
+        Ok(Some(result))
+    }
+
+    /// Lowers an object field access in the current context of a function
+    fn lower_field_access(
+        &self,
+        receiver: &Located<Expression>,
+        field: &str,
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        // object we are accessing
+        let receiver = self.expect_lowered_expression_value(
+            receiver,
+            context,
+            TypeMismatchSource::FieldAccessReciever {
+                field: field.to_string(),
+            },
+        )?;
+
+        // name and signature of the object
+        let object_name = receiver.value_type.object_name().ok_or_else(|| {
+            PhotonErrorKind::error(
+                PhotonErrorKind::FieldAccessToNonObjectType {
+                    found: receiver.value_type.clone(),
+                },
+                span,
+            )
+        })?;
+
+        let object = self.symbols.object(object_name).ok_or_else(|| {
+            PhotonErrorKind::error(
+                PhotonErrorKind::UnknownObject {
+                    name: object_name.clone(),
+                },
+                span,
+            )
+        })?;
+
+        // Ensure this object field actually exists
+        let field_type = expect_object_field(object, field, span)?;
+
+        Ok(LoweredExpression::value(
+            format!(
+                "!std::object_get {} -> {}.{}",
+                block(&receiver.code),
+                object.name,
+                field
+            ),
+            field_type.clone(),
+        ))
+    }
 
     /// Outputs one lowered string from some code and a span that
     /// contains the @source_loc decorative directive for the full source location
@@ -1533,7 +1955,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 /// Converts a string of `contents` to
 /// a boson3 block essentially
 /// {contents}
-fn block(contents: &str) -> String {
+pub fn block(contents: &str) -> String {
     format!("{{ {contents} }}")
 }
 
@@ -1576,15 +1998,12 @@ fn resolve_intrinsic(name: &QualifiedName) -> Option<Intrinsic> {
     // map to actual intrinsic underlying call
     match name {
         "clone" => Some(Intrinsic::Clone),
-        "type" => Some(Intrinsic::TypeOf),
+        "typeof" => Some(Intrinsic::TypeOf),
         "drop" => Some(Intrinsic::Drop),
         "assert" => Some(Intrinsic::Assert),
-        "int_to_float" => Some(Intrinsic::IntToFloat),
-        "uint_to_float" => Some(Intrinsic::UIntToFloat),
-        "float_to_int" => Some(Intrinsic::FloatToInt),
-        "float_to_uint" => Some(Intrinsic::FloatToUInt),
-        "int_to_uint" => Some(Intrinsic::IntToUInt),
-        "uint_to_int" => Some(Intrinsic::UIntToInt),
+        "to_float" => Some(Intrinsic::ToFloat),
+        "to_int" => Some(Intrinsic::ToInt),
+        "to_uint" => Some(Intrinsic::ToUInt),
         _ => None,
     }
 }
@@ -1611,6 +2030,54 @@ fn expect_argument_count(expected: usize, actual: usize, span: SourceSpan) -> Ph
             },
             span,
         ))
+    }
+}
+
+impl FunctionSignature {
+    /// Validates all these arguments match the function signature, otherwise erroring
+    pub fn validate_arguments(
+        &self,
+        span: SourceSpan,
+        arguments: &Vec<LoweredExpression>,
+    ) -> PhotonResult<()> {
+        // type check all arguments
+        for (index, ele) in arguments.iter().enumerate() {
+            // validate type matches
+            ele.expect_type(
+                span,
+                &self.parameters[index],
+                TypeMismatchSource::FunctionCallArgument {
+                    name: self.name.clone(),
+                    argn: index,
+                },
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Validates all these arguments match the method's signature otherwise erroring
+    ///
+    /// This essentially just skips the first argument.
+    pub fn validate_method_arguments(
+        &self,
+        span: SourceSpan,
+        arguments: &Vec<LoweredExpression>,
+    ) -> PhotonResult<()> {
+        // type check all arguments
+        for (index, ele) in arguments.iter().enumerate() {
+            // validate type matches
+            ele.expect_type(
+                span,
+                &self.parameters[index + 1],
+                TypeMismatchSource::FunctionCallArgument {
+                    name: self.name.clone(),
+                    argn: index + 1,
+                },
+            )?;
+        }
+
+        Ok(())
     }
 }
 
@@ -1768,4 +2235,20 @@ fn expect_object_field<'a>(
             span,
         )
     })
+}
+
+impl Display for Intrinsic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let intrinsic_name = match self {
+            Intrinsic::Clone => "clone",
+            Intrinsic::TypeOf => "typeof",
+            Intrinsic::Drop => "drop",
+            Intrinsic::Assert => "assert",
+            Intrinsic::ToFloat => "to_float",
+            Intrinsic::ToInt => "to_int",
+            Intrinsic::ToUInt => "to_uint",
+        };
+
+        write!(f, "`{intrinsic_name}`")
+    }
 }

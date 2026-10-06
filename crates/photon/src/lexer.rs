@@ -52,6 +52,7 @@ pub enum TokenKind {
     Foreach,
     In,
     Loop,
+    As,
     Break,
     Continue,
 
@@ -706,6 +707,7 @@ impl<'src> Lexer<'src> {
             "foreach" => TokenKind::Foreach,
             "in" => TokenKind::In,
             "loop" => TokenKind::Loop,
+            "as" => TokenKind::As,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
             _ => TokenKind::Identifier(text),
@@ -928,6 +930,7 @@ impl TokenKind {
             Self::Foreach => "foreach",
             Self::In => "in",
             Self::Loop => "loop",
+            Self::As => "as",
             Self::Break => "break",
             Self::Continue => "continue",
             Self::LeftParen => "(",

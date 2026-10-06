@@ -1367,7 +1367,7 @@ impl<'tokens> Parser<'tokens> {
     /// Parses a multiplicative binary expression
     fn parse_multiplicative(&mut self) -> PhotonResult<Located<Expression>> {
         // left side
-        let mut left = self.parse_unary()?;
+        let mut left = self.parse_cast()?;
 
         // potential right side
         loop {
@@ -1387,12 +1387,38 @@ impl<'tokens> Parser<'tokens> {
             };
 
             // must be a following right expression applied to
-            let right = self.parse_unary()?;
+            let right = self.parse_cast()?;
 
             left = make_binary(left, operator, right);
         }
 
         Ok(left)
+    }
+
+    /// Parses type reinterpretation expressions which bypass the compiler
+    /// and force things to be certain types regardless
+    fn parse_cast(&mut self) -> PhotonResult<Located<Expression>> {
+        // left hand side
+        let mut expression = self.parse_unary()?;
+
+        // see if it is an as with potential type rhs
+        while self.eat(&TokenKind::As) {
+            let start = expression.span.start;
+
+            // the target type to cast to
+            let target_type = self.parse_type()?;
+            let end = self.previous_span().end;
+
+            expression = Located::new(
+                Expression::Cast {
+                    expression: Box::new(expression),
+                    target_type,
+                },
+                (start..end).into(),
+            );
+        }
+
+        Ok(expression)
     }
 
     /// Parses a unary expression, (unary op)some

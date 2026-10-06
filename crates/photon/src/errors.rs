@@ -4,7 +4,7 @@
 use std::fmt::Display;
 
 use crate::{
-    ast::{AssignmentOperator, Located, QualifiedName, SourceSpan, StepOperator, TypeName}, lexer::TokenKind,
+    ast::{AssignmentOperator, Located, QualifiedName, SourceSpan, StepOperator, TypeName}, lexer::TokenKind, lowerer::Intrinsic,
 };
 
 /// All possible error kinds that can occur during
@@ -95,6 +95,10 @@ pub enum PhotonErrorKind {
     /// An overlapping callable, either an object or a function
     /// was obth declared with the same name!
     DuplicateCallable { name: QualifiedName },
+
+    /// An unknown callable, either an object or a function.
+    /// These were not found during the call lookup
+    UnknownCallable { name: QualifiedName },
 
     /// A type mismatch error occured during the lowering phase.
     TypeMismatchSource {
@@ -189,11 +193,23 @@ pub enum PhotonErrorKind {
         found: TypeName
     },
 
+    /// Found the usage of a field access to a non-object type when
+    /// trying to access using object-field access syntax
+    FieldAccessToNonObjectType {
+        found: TypeName
+    },
+
     /// Invalid assignment target, non-array, object, local or global
     InvalidAssignmentTarget,
 
     /// Invalid call target, it is a non-name
-    InvalidNonNameCallTarget
+    InvalidNonNameCallTarget,
+
+    /// Invalid conversion type for specific intrinsic
+    InvalidTypeForConversionIntrinsic {
+        intrinsic: Intrinsic,
+        found: TypeName
+    }
 }
 
 /// Located version of `PhotonErrorKind` w source span info
@@ -377,6 +393,12 @@ impl Display for PhotonErrorKind {
             Self::UnknownObject { name } => {
                 write!(f, "found reference to unknown object `{name}`")
             }
+           Self::UnknownCallable { name } => {
+                write!(
+                    f,
+                    "found reference to unknown function or a object under the name `{name}`, however an existing function/object already exists under the same name! because the object constructor is a call it's impossible to resolve this, so this callable case is illegal!"
+                )
+            }
             Self::NumArgumentCallMismatch { expected, found } => {
                 write!(f, "expected {expected} arguments, received {found}")
             }
@@ -456,6 +478,12 @@ impl Display for PhotonErrorKind {
                     "unexpected illegal field assignment to non object type `{found}`"
                 )
             }
+            Self::FieldAccessToNonObjectType { found } => {
+                write!(
+                    f,
+                    "unexpected illegal field access to non object type `{found}`"
+                )
+            }
             Self::UnknownObjectField { name, field } => {
                                 write!(
                     f,
@@ -467,6 +495,9 @@ impl Display for PhotonErrorKind {
             }
             Self::InvalidNonNameCallTarget => {
                 write!(f, "invalid call target, call targets must be a direct name (function/object constructor).")
+            }
+            Self::InvalidTypeForConversionIntrinsic { intrinsic, found } => {
+                write!(f, "invalid type lhs for conversion intrinsic `{intrinsic}`, got lhs type of `{found}`")
             }
         }
     }
@@ -526,7 +557,51 @@ pub enum TypeMismatchSource {
     ArrayIndexAssignmentReciever,
 
     /// In the position of an array literal expression
-    ArrayLiteralExpression
+    ArrayLiteralExpression,
+    
+    /// As the argument to this intrinsic call
+    IntrinsicArgument {
+        intrinsic: Intrinsic
+    },
+
+    /// As the condition to an assert expression
+    AssertCondition,
+    
+    /// As the arguments to an object constructor
+    ObjectConstructorArguments {
+        name: QualifiedName
+    },
+
+    /// As the arguments to a function call
+    FunctionCallArguments {
+        name: QualifiedName
+    },
+
+    /// As this field of to an object constructor
+    ObjectConstructorField {
+        name: QualifiedName,
+        field: String
+    },
+
+    /// As this param # to a function
+    FunctionCallArgument {
+        name: QualifiedName,
+        argn: usize
+    },
+
+    /// A normal method call on an object which is the reciever
+    MethodCallReceiver,
+
+    /// As the argument to an array append call
+    ArrayAppendArgument,
+
+    /// As the argument to an array prepend call
+    ArrayPrependArgument,
+
+    /// As the reciever of a normal field access
+    FieldAccessReciever {
+        field: String
+    }
 }
 
 impl Display for TypeMismatchSource {
@@ -576,6 +651,36 @@ impl Display for TypeMismatchSource {
             }
             TypeMismatchSource::ArrayLiteralExpression => {
                 write!(f, "An array being constructed by an array literal expression")
+            }
+            TypeMismatchSource::IntrinsicArgument { intrinsic } => {
+                write!(f, "As the argument to the intrinsic `{intrinsic}`")
+            }
+            TypeMismatchSource::AssertCondition => {
+                write!(f, "As the condition that is being asserted upon in the assert intrinsic call")
+            }
+            TypeMismatchSource::ObjectConstructorArguments { name } => {
+                write!(f, "As arguments to the object constructor for the object `{name}`")
+            },
+            TypeMismatchSource::FunctionCallArguments { name } => {
+                write!(f, "As arguments to the function `{name}`")
+            },
+            TypeMismatchSource::ObjectConstructorField { name, field } => {
+                write!(f, "Value for the field `{field}` for the object constructor for the object `{name}`")
+            },
+            TypeMismatchSource::FunctionCallArgument { name, argn } => {
+                write!(f, "Argument for the parameter #`{argn}` for the function `{name}`")
+            }
+            TypeMismatchSource::MethodCallReceiver => {
+                write!(f, "The reciever of a method call")
+            }
+            TypeMismatchSource::ArrayAppendArgument => {
+                write!(f, "The argument to an array append call")
+            }
+            TypeMismatchSource::ArrayPrependArgument => {
+                write!(f, "The argument to an array prepend call")
+            }
+            TypeMismatchSource::FieldAccessReciever { field } => {
+                write!(f, "The object reciever of the field access expression with the field `{field}`")
             }
         }
     }

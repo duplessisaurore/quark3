@@ -2,6 +2,8 @@
 
 use std::{fmt, ops::Range};
 
+use crate::lowerer::{LoweredExpression, block};
+
 /// A span into a photon3 source file built off chumsksy's
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceSpan {
@@ -280,6 +282,10 @@ pub enum Expression {
         body: String,
         body_span: SourceSpan,
     },
+    Cast {
+        expression: Box<Located<Expression>>,
+        target_type: TypeName,
+    },
 }
 
 /// The name of the method we are calling on an object
@@ -539,6 +545,19 @@ impl TypeName {
         match self {
             TypeName::Object(name) => TypeName::Object(name.resolve(current_namespace)),
             primitive => primitive.clone(),
+        }
+    }
+
+    /// Lowers one section of code in regards to the current TypeName's
+    /// type.
+    ///
+    /// Essentially if self = void -> wrap code in drop, otherwise ret code
+    /// with self as type
+    pub fn normalise_to_drop(&self, code: &str) -> LoweredExpression {
+        if *self == TypeName::Void {
+            LoweredExpression::no_value(format!("!std::drop {}", block(&code)))
+        } else {
+            LoweredExpression::value(code, self.clone())
         }
     }
 }
