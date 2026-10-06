@@ -566,8 +566,7 @@ impl Display for PhotonErrorKind {
 impl Display for PhotonError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let actual_error_kind = &self.value;
-        let actual_error_span = &self.span;
-        write!(f, "{actual_error_kind} at byte range {actual_error_span}")
+        write!(f, "{actual_error_kind}")
     }
 }
 
@@ -678,131 +677,137 @@ impl Display for TypeMismatchSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TypeMismatchSource::ForEachArraySource => {
-                write!(f, "The source array of a foreach statement")
+                write!(f, "the source array of a foreach statement")
             }
             TypeMismatchSource::ForCondition => {
-                write!(f, "The condition of a for statement")
+                write!(f, "the condition of a for statement")
             }
             TypeMismatchSource::DoWhileCondition => {
-                write!(f, "The condition of a dowhile statement")
+                write!(f, "the condition of a dowhile statement")
             }
             TypeMismatchSource::WhileCondition => {
-                write!(f, "The condition of a while statement")
+                write!(f, "the condition of a while statement")
             }
             TypeMismatchSource::IfCondition => {
-                write!(f, "The condition of an if statement")
+                write!(f, "the condition of an if statement")
             }
             TypeMismatchSource::ReturnValue => {
-                write!(f, "The expression of a return statement")
+                write!(f, "the expression of a return statement")
             }
             TypeMismatchSource::TailCallMethodReciever => {
-                write!(f, "The reciever of a method in a tail call position")
+                write!(f, "the reciever of a method in a tail call position")
             }
             TypeMismatchSource::TailCallArguments => {
-                write!(f, "The arguments to a tail call")
+                write!(f, "the arguments to a tail call")
             }
             TypeMismatchSource::TailCallMethodArguments => {
-                write!(f, "The arguments to a tail call on an object method")
+                write!(f, "the arguments to a tail call on an object method")
             }
             TypeMismatchSource::LetLocalInitialiser => {
-                write!(f, "The initialiser of a local declaration")
+                write!(f, "the initialiser of a local declaration")
             }
             TypeMismatchSource::ArrayIndex { source } => {
                 write!(
                     f,
-                    "The array index of a an array used in the position of `{source}`"
+                    "the array index of a an array used in the position of `{source}`"
                 )
             }
             TypeMismatchSource::AssignmentRHS => {
-                write!(f, "The right-hand side of an assignment")
+                write!(f, "the right-hand side of an assignment")
             }
             TypeMismatchSource::FieldAssignmentReciever => {
                 write!(
                     f,
-                    "The left-hand side of an assignment as an object for a field assignment"
+                    "the left-hand side of an assignment as an object for a field assignment"
                 )
             }
             TypeMismatchSource::ArrayIndexAssignmentReciever => {
                 write!(
                     f,
-                    "The left-hand side of an assignment as an array for a field assignment"
+                    "the left-hand side of an assignment as an array for a field assignment"
                 )
             }
             TypeMismatchSource::ArrayLiteralExpression => {
                 write!(
                     f,
-                    "An array being constructed by an array literal expression"
+                    "an array being constructed by an array literal expression"
                 )
             }
             TypeMismatchSource::IntrinsicArgument { intrinsic } => {
-                write!(f, "As the argument to the intrinsic `{intrinsic}`")
+                write!(f, "as the argument to the intrinsic `{intrinsic}`")
             }
             TypeMismatchSource::AssertCondition => {
                 write!(
                     f,
-                    "As the condition that is being asserted upon in the assert intrinsic call"
+                    "the condition that is being asserted upon in the assert intrinsic call"
                 )
             }
             TypeMismatchSource::ObjectConstructorArguments { name } => {
                 write!(
                     f,
-                    "As arguments to the object constructor for the object `{name}`"
+                    "arguments to the object constructor for the object `{name}`"
                 )
             }
             TypeMismatchSource::FunctionCallArguments { name } => {
-                write!(f, "As arguments to the function `{name}`")
+                write!(f, "arguments to the function `{name}`")
             }
             TypeMismatchSource::ObjectConstructorField { name, field } => {
                 write!(
                     f,
-                    "Value for the field `{field}` for the object constructor for the object `{name}`"
+                    "value for the field `{field}` for the object constructor for the object `{name}`"
                 )
             }
             TypeMismatchSource::FunctionCallArgument { name, argn } => {
                 write!(
                     f,
-                    "Argument for the parameter #`{argn}` for the function `{name}`"
+                    "argument for the parameter #`{argn}` for the function `{name}`"
                 )
             }
             TypeMismatchSource::MethodCallReceiver => {
-                write!(f, "The reciever of a method call")
+                write!(f, "the reciever of a method call")
             }
             TypeMismatchSource::ArrayAppendArgument => {
-                write!(f, "The argument to an array append call")
+                write!(f, "the argument to an array append call")
             }
             TypeMismatchSource::ArrayPrependArgument => {
-                write!(f, "The argument to an array prepend call")
+                write!(f, "the argument to an array prepend call")
             }
             TypeMismatchSource::FieldAccessReciever { field } => {
                 write!(
                     f,
-                    "The object reciever of the field access expression with the field `{field}`"
+                    "the object reciever of the field access expression with the field `{field}`"
                 )
             }
             TypeMismatchSource::CastTarget => {
-                write!(f, "The target/reciever of a cast operation")
+                write!(f, "the target/reciever of a cast operation")
             }
             TypeMismatchSource::ArrayIndexExpr => {
-                write!(f, "An array indexeing expression")
+                write!(f, "an array indexeing expression")
             }
             TypeMismatchSource::ConditionExpressionOfTheConditionalExpression => {
-                write!(f, " The condition expression of a conditional expression")
+                write!(f, "the condition expression of a conditional expression")
             }
             TypeMismatchSource::FalseBranchCondExpr => {
-                write!(f, "The false branch of a conditional expression")
+                write!(f, "the false branch of a conditional expression")
             }
             TypeMismatchSource::TrueBranchCondExpr => {
-                write!(f, "The true branch of a conditional expression")
+                write!(f, "the true branch of a conditional expression")
             }
             TypeMismatchSource::UnaryOperand => {
-                write!(f, "The operand to a unary expression")
+                write!(f, "the operand to a unary expression")
             }
             TypeMismatchSource::BinOpLHS => {
-                write!(f, "The left-hand side operand to a binary expression")
+                write!(f, "the left-hand side operand to a binary expression")
             }
             TypeMismatchSource::BinOpRHS => {
-                write!(f, "The right-hand side operand to a binary expression")
+                write!(f, "the right-hand side operand to a binary expression")
             }
         }
+    }
+}
+
+impl From<SourceSpan> for miette::SourceSpan {
+    fn from(span: SourceSpan) -> Self {
+        (span.start, span.end - span.start).into()
     }
 }

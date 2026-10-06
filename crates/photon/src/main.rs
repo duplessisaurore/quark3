@@ -8,12 +8,14 @@
 //! ## Photon
 //!
 //! The `Photon3` crate is a crate that desugars some extra `Photon3` syntax
-//! and type information ontop of `Boson3` std.b3, view the `README.md` in the repository.
+//! and type information ontop of `Boson3` std.b3.
 
 use std::collections::HashMap;
-use std::{error::Error, fs, path::PathBuf, process};
+use std::{fs, path::PathBuf};
 
 use clap::Parser;
+use miette::{Diagnostic, IntoDiagnostic, NamedSource, Result, SourceSpan, WrapErr, miette};
+use thiserror::Error;
 
 use crate::lexer::Lexer;
 use crate::lowerer::{Lowerer, SourceMap, SymbolTable};
@@ -38,72 +40,87 @@ struct Cli {
     output_dir: PathBuf,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+/// An error tied to a span in a source file
+/// 
+/// We then pass this to miette for fancy printing
+#[derive(Debug, Error, Diagnostic)]
+#[error("failed to {stage} {file}")]
+#[diagnostic(code(photon3::error))]
+struct SourceError {
+    stage: &'static str,
+    file: String,
+    message: String,
+    #[source_code]
+    src: NamedSource<String>,
+    #[label("{message}")]
+    span: SourceSpan,
+}
+
+impl SourceError {
+    /// Returns a new photon3::SourceError that can
+    /// be returned and then prettified by miette.
+    fn new(
+        stage: &'static str,
+        file: &str,
+        source: &str,
+        message: String,
+        span: impl Into<SourceSpan>,
+    ) -> Self {
+        Self {
+            stage,
+            file: file.to_owned(),
+            message,
+            src: NamedSource::new(file, source.to_owned()),
+            span: span.into(),
+        }
+    }
+}
+
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let input_paths = &cli.input;
     let output_dir = &cli.output_dir;
 
     let mut modules = Vec::new();
-    let mut source_maps = HashMap::new();
+    
+    // namespace -> (source map, file name, source text)
+    let mut sources = HashMap::new();
 
     // Read source files
     for source_file in input_paths {
-        let source = fs::read_to_string(source_file).unwrap_or_else(|e| {
-            eprintln!("error reading {}: {e}", source_file.display());
-            process::exit(1);
-        });
+        let file_name = source_file.display().to_string();
+
+        let source = fs::read_to_string(source_file)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("error reading {file_name}"))?;
 
         let source_map = SourceMap::new(&source);
 
         // Lex the source file
-        let tokens = Lexer::new(&source).tokenize().unwrap_or_else(|e| {
-            eprintln!(
-                "failed to parse file: {e}, {} {}:{}",
-                source_file.to_string_lossy(),
-                source_map.span_start(e.span).line,
-                source_map.span_start(e.span).column
-            );
-            process::exit(1);
-        });
+        let tokens = Lexer::new(&source)
+            .tokenize()
+            .map_err(|e| SourceError::new("lex", &file_name, &source, e.to_string(), e.span))?;
 
         // Parse it
         let ast = PhotonParser::new(source_file.to_string_lossy().to_string(), &tokens)
             .parse_module()
-            .unwrap_or_else(|e| {
-                eprintln!(
-                    "failed to parse file: {e}, {} {}:{}",
-                    source_file.to_string_lossy(),
-                    source_map.span_start(e.span).line,
-                    source_map.span_start(e.span).column
-                );
-                process::exit(1);
-            });
+            .map_err(|e| SourceError::new("parse", &file_name, &source, e.to_string(), e.span))?;
 
-        source_maps.insert(ast.namespace.clone(), source_map);
+        sources.insert(ast.namespace.clone(), (source_map, file_name, source));
         modules.push(ast);
     }
 
-    // make symbol table
-    let symbol_table =
-        SymbolTable::collect_all_symbols_from_modules(&modules).unwrap_or_else(|e| {
-            eprintln!("failed to collect smybols for file: {e} ");
-            process::exit(1);
-        });
+    // Make symbol table
+    let symbol_table = SymbolTable::collect_all_symbols_from_modules(&modules)
+        .map_err(|e| miette!("failed to collect symbols: {e}"))?;
 
     for module in modules {
-        let source_map = source_maps.get(&module.namespace).unwrap();
-        let lowered_stuff = Lowerer::new(&symbol_table, &source_map, &module)
+        let (source_map, file_name, source) = &sources[&module.namespace];
+
+        let lowered = Lowerer::new(&symbol_table, source_map, &module)
             .lower_to_string()
-            .unwrap_or_else(|e| {
-                eprintln!(
-                    "failed to lower file: {e}, {} {}:{}",
-                    module.namespace,
-                    source_map.span_start(e.span).line,
-                    source_map.span_start(e.span).column
-                );
-                process::exit(1);
-            });
+            .map_err(|e| SourceError::new("lower", file_name, source, e.to_string(), e.span))?;
 
         let mut output_path = output_dir.clone();
 
@@ -113,10 +130,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             module.namespace.to_string().replace("::", "_")
         ));
 
-        fs::write(output_path.clone(), lowered_stuff.contents).unwrap_or_else(|e| {
-            eprintln!("error writing {}: {e}", output_path.display());
-            process::exit(1);
-        });
+        fs::write(&output_path, lowered.contents)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("error writing {}", output_path.display()))?;
     }
 
     Ok(())
