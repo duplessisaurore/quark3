@@ -83,6 +83,11 @@ pub enum Instruction {
     /// with that name
     PushFunctionIndex(String),
 
+    /// push.uint <object name>
+    /// as in the index of the object
+    /// with that name
+    PushObjectIndex(String),
+
     /// call <function name>
     Call(String),
 
@@ -108,7 +113,9 @@ impl Instruction {
             Self::PushInt(_)
             | Self::PushUInt(_)
             | Self::PushFloat(_)
+            | Self::PushObjectIndex(_)
             | Self::PushFunctionIndex(_) => 9,
+
             Self::PushBool(_) => 2,
 
             // Emits a `push.uint` (9 bytes) for the operand
@@ -145,6 +152,9 @@ pub enum ParseError {
 
     /// A pushfn was encountered outside of a function
     PushFnOutsideFunction,
+
+    /// A pushobject was encountered outside of a function
+    PushObjectOutsideFunction,
 
     /// A required argument was missing
     MissingArgument { directive: String },
@@ -193,6 +203,9 @@ impl Display for ParseError {
             }
             Self::PushFnOutsideFunction => {
                 write!(f, "push.fn outside of function")
+            }
+            Self::PushObjectOutsideFunction => {
+                write!(f, "push.object outside of function")
             }
             Self::DuplicateFile {
                 index,
@@ -343,6 +356,21 @@ pub fn parse(input: &str) -> Result<ParsedFile, LinedParseError> {
                 ));
             }
 
+            // @push.object <object_name>
+            // Attaches a push.uint at the current position that pushes
+            // that objects's id
+            ["@push.object", object_name] => {
+                let func = current_function
+                    .as_mut()
+                    .ok_or(ParseError::PushObjectOutsideFunction.with_line(line_number))?;
+
+                // This is sugar for PushFunctionIndex instruction
+                func.body.push(Statement::Instruction(
+                    Instruction::PushObjectIndex(object_name.to_string()),
+                    line_number,
+                ));
+            }
+
             // <label>:
             // Used for assisting with offset based instructions
             [label] if label.ends_with(':') => {
@@ -464,21 +492,37 @@ fn parse_instruction(line: usize, tokens: &[&str]) -> Result<Instruction, LinedP
 
         Opcode::Call => {
             let name = require_arg(line, long_from_opcode(&Opcode::Call), tokens, 1)?;
+            if name == "@raw" {
+                return Ok(Instruction::Plain(opcode));
+            }
+            
             Ok(Instruction::Call(name.to_string()))
         }
 
         Opcode::TailCall => {
             let name = require_arg(line, long_from_opcode(&Opcode::TailCall), tokens, 1)?;
+            if name == "@raw" {
+                return Ok(Instruction::Plain(opcode));
+            }
+            
             Ok(Instruction::TailCall(name.to_string()))
         }
 
         // This uses the object name as an argument
         Opcode::ObjectNew => {
             let name = require_arg(line, long_from_opcode(&Opcode::ObjectNew), tokens, 1)?;
+            if name == "@raw" {
+                return Ok(Instruction::Plain(opcode));
+            }
+            
             Ok(Instruction::ObjectNew(name.to_string()))
         }
         Opcode::ObjectTypeTag => {
             let name = require_arg(line, long_from_opcode(&Opcode::ObjectTypeTag), tokens, 1)?;
+            if name == "@raw" {
+                return Ok(Instruction::Plain(opcode));
+            }
+            
             Ok(Instruction::ObjectTypeTag(name.to_string()))
         }
 

@@ -532,6 +532,20 @@ fn emit_instruction(
                 })?,
             );
         }
+        Instruction::PushObjectIndex(name) => {
+            let idx = object_map.get(name.as_str()).copied().ok_or(
+                AssembleError::UndefinedObject {
+                    line,
+                    name: name.clone(),
+                },
+            )?;
+            push_uint(
+                out,
+                u64::try_from_or_assemble_error(idx, |_| {
+                    AssembleError::InstructionOperandTooLarge
+                })?,
+            );
+        }
     }
 
     Ok(())

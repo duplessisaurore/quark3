@@ -162,6 +162,9 @@ pub enum PhotonErrorKind {
     /// A name was attempted to be assigned to but it could not be found!
     UnknownAssignmentTarget { name: String },
 
+    /// A name was attempted to be an expression to but it could not be found!
+    UnknownName { name: String },
+
     /// A global was looked up but it could not be found!
     UnknownGlobal { name: String },
     
@@ -432,6 +435,12 @@ impl Display for PhotonErrorKind {
                     "found reference to unknown assignment target `{name}`, this could not be resolved to a local or a global"
                 )
             }
+            Self::UnknownName { name } => {
+                write!(
+                    f,
+                    "found reference to unknown `{name}`, this could not be resolved to a local or a global"
+                )
+            }
             Self::UnknownGlobal { name } => {
                 write!(
                     f,
@@ -508,7 +517,10 @@ pub enum TypeMismatchSource {
     FieldAssignmentReciever,
 
     /// In the position of a array index assignment as the array we are assigning to
-    ArrayIndexAssignmentReciever
+    ArrayIndexAssignmentReciever,
+
+    /// In the position of an array literal expression
+    ArrayLiteralExpression
 }
 
 impl Display for TypeMismatchSource {
@@ -555,6 +567,9 @@ impl Display for TypeMismatchSource {
             }
             TypeMismatchSource::ArrayIndexAssignmentReciever => {
                 write!(f, "The left-hand side of an assignment as an array for a field assignment")   
+            }
+            TypeMismatchSource::ArrayLiteralExpression => {
+                write!(f, "An array being constructed by an array literal expression")
             }
         }
     }

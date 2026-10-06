@@ -85,6 +85,7 @@ pub fn pretty_print(source: impl Display, file: &ParsedFile) -> String {
                         Instruction::ObjectTypeTag(name) => format!("object.type.tag {name}"),
                         Instruction::PushUInt(v) => format!("push.uint {v}"),
                         Instruction::PushFunctionIndex(name) => format!("@push.fn {name}"),
+                        Instruction::PushObjectIndex(name) => format!("@push.object {name}"),
                     };
                     let _ = writeln!(out, "    {text}");
                 }

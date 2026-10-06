@@ -163,13 +163,13 @@ impl LoweredExpression {
     fn expect_type(
         &self,
         span: SourceSpan,
-        expected: TypeName,
+        expected: &TypeName,
         source: TypeMismatchSource,
     ) -> PhotonResult<()> {
-        if self.value_type != expected {
+        if self.value_type != *expected {
             return Err(PhotonErrorKind::error(
                 PhotonErrorKind::TypeMismatchSource {
-                    expected,
+                    expected: expected.clone(),
                     found: self.value_type.clone(),
                     source,
                 },
@@ -767,7 +767,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         let expression = self.lower_expression(expression, context)?;
 
         // void should auto-drop per fn comment, and we dont want to stack underflow
-        if expression.is_void() {
+        if !expression.produces_value() {
             Ok(expression.code)
         } else {
             Ok(format!("!std::drop {}", block(&expression.code)))
@@ -1384,6 +1384,141 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
         context.locals.insert(name.to_owned(), local_type);
         Ok(())
+    }
+
+    /// Lowers a Photon3 expression into the LoweredExpression holding the code
+    /// used to produce the expression's value and the type of this value.
+    fn lower_expression(
+        &self,
+        expression: &Located<Expression>,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        let span = expression.span;
+
+        let lowered_expr = match &expression.value {
+            // literals, easy mapping
+            Expression::IntLiteral(value) => {
+                LoweredExpression::value(format!("!std::int {value}"), TypeName::Int)
+            }
+            Expression::UIntLiteral(value) => {
+                LoweredExpression::value(format!("!std::uint {value}"), TypeName::UInt)
+            }
+            Expression::FloatLiteral(value) => {
+                LoweredExpression::value(format!("!std::float {value:?}"), TypeName::Float)
+            }
+            Expression::BoolLiteral(value) => {
+                LoweredExpression::value(format!("!std::bool {value}"), TypeName::Bool)
+            }
+            Expression::Name(name) => self.lower_name_expr(name, span, context)?,
+            Expression::ArrayLiteral(elements) => self.lower_array_lit_expr(elements, context)?,
+            Expression::Call { callee, arguments } => todo!(),
+            Expression::FieldAccess { receiver, field } => todo!(),
+            Expression::MethodCall {
+                receiver,
+                method,
+                arguments,
+            } => todo!(),
+            Expression::Index { array, index } => todo!(),
+            Expression::Unary { operator, operand } => todo!(),
+            Expression::Binary {
+                left,
+                operator,
+                right,
+            } => todo!(),
+            Expression::Conditional {
+                condition,
+                when_true,
+                when_false,
+            } => todo!(),
+            Expression::Boson3 {
+                declared_type,
+                body,
+                body_span,
+            } => {
+                // map into source and return as expr of type, we dont normalise bcz it should do what it says.
+                let boson3_source = self.lower_boson3_statement(body, *body_span)?;
+                let expr_type = declared_type.canonicalise(&self.module.namespace);
+                LoweredExpression::value(boson3_source, expr_type)
+            }
+        };
+
+        Ok(lowered_expr)
+    }
+
+    /// Lowers one name in the position of an expression in the current `context`
+    /// of the function.
+    ///
+    /// This essentially tries to just resolve the name.
+    fn lower_name_expr(
+        &self,
+        name: &QualifiedName,
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        if name.is_unqualified() {
+            // simple unit
+            if name.last() == "unit" {
+                return Ok(LoweredExpression::value("!std::unit", TypeName::Unit));
+            }
+
+            // otherwise maybe a local of this function
+            if let Some(local_type) = context.locals.get(name.last()) {
+                return Ok(LoweredExpression::value(
+                    format!("!std::get {}", name.last()),
+                    local_type.clone(),
+                ));
+            }
+        }
+
+        // isnt a local or unit, try map global.
+        let global_name = name.resolve(&self.module.namespace);
+        if let Some(global_type) = self.symbols.global(&global_name) {
+            return Ok(LoweredExpression::value(
+                format!("!std::global_get {global_name}"),
+                global_type.clone(),
+            ));
+        }
+
+        // Couldn't be found
+        Err(PhotonErrorKind::error(
+            PhotonErrorKind::UnknownName {
+                name: name.to_string(),
+            },
+            span,
+        ))
+    }
+
+    /// Lowers one array literal expression in the current context of a function
+    fn lower_array_lit_expr(
+        &self,
+        elements: &Vec<Located<Expression>>,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        // lower each of the array literal values
+        let values = self.lower_arguments(
+            elements,
+            context,
+            TypeMismatchSource::ArrayLiteralExpression,
+        )?;
+
+        Ok(LoweredExpression::value(
+            format!(
+                "!std::array {} ( {} )",
+                values.len(),
+                lowered_exprs_block(&values)
+            ),
+            TypeName::Array,
+        ))
+    }
+
+    /// Lowers one call expression in the current context of a function
+    fn lower_call_expr(
+        &self,
+        callee: &Located<Expression>,
+        arguments: &[Located<Expression>],
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
     }
 
     /// Outputs one lowered string from some code and a span that
