@@ -1511,15 +1511,15 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         ))
     }
 
-    /// Lowers one call expression in the current context of a function
-    fn lower_call_expr(
-        &self,
-        callee: &Located<Expression>,
-        arguments: &[Located<Expression>],
-        span: SourceSpan,
-        context: &FunctionContext,
-    ) -> PhotonResult<LoweredExpression> {
-    }
+    // /// Lowers one call expression in the current context of a function
+    // fn lower_call_expr(
+    //     &self,
+    //     callee: &Located<Expression>,
+    //     arguments: &[Located<Expression>],
+    //     span: SourceSpan,
+    //     context: &FunctionContext,
+    // ) -> PhotonResult<LoweredExpression> {
+    // }
 
     /// Outputs one lowered string from some code and a span that
     /// contains the @source_loc decorative directive for the full source location

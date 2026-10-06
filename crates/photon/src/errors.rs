@@ -190,7 +190,10 @@ pub enum PhotonErrorKind {
     },
 
     /// Invalid assignment target, non-array, object, local or global
-    InvalidAssignmentTarget
+    InvalidAssignmentTarget,
+
+    /// Invalid call target, it is a non-name
+    InvalidNonNameCallTarget
 }
 
 /// Located version of `PhotonErrorKind` w source span info
@@ -461,6 +464,9 @@ impl Display for PhotonErrorKind {
             }
             Self::InvalidAssignmentTarget => {
                 write!(f, "invalid assignment target, assignment target must be a local, global, object field, or array element")
+            }
+            Self::InvalidNonNameCallTarget => {
+                write!(f, "invalid call target, call targets must be a direct name (function/object constructor).")
             }
         }
     }
