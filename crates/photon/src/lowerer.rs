@@ -12,9 +12,9 @@ use std::{collections::HashMap, fmt::Display};
 
 use crate::{
     ast::{
-        AssignmentOperator, Expression, FunctionDeclaration, Located, MethodName, Module,
-        ObjectDeclaration, Parameter, QualifiedName, SimpleStatement, SourceSpan, Statement,
-        StepOperator, TopLevelItem, TypeName,
+        AssignmentOperator, BinaryOperator, Expression, FunctionDeclaration, Located, MethodName,
+        Module, ObjectDeclaration, Parameter, QualifiedName, SimpleStatement, SourceSpan,
+        Statement, StepOperator, TopLevelItem, TypeName, UnaryOperator,
     },
     errors::{PhotonErrorKind, PhotonResult, TypeMismatchSource},
 };
@@ -152,7 +152,7 @@ impl LoweredExpression {
     /// Returns whether or not this lowered expression produces a value
     /// e.g it is of the `Void` type.
     fn produces_value(&self) -> bool {
-        self.value_type == TypeName::Void
+        self.value_type != TypeName::Void
     }
 
     /// Validates that this lowered expression has some type `expected`
@@ -163,7 +163,7 @@ impl LoweredExpression {
         expected: &TypeName,
         source: TypeMismatchSource,
     ) -> PhotonResult<()> {
-        if self.value_type != *expected {
+        if !type_accepts(expected, &self.value_type) {
             return Err(PhotonErrorKind::error(
                 PhotonErrorKind::TypeMismatchSource {
                     expected: expected.clone(),
@@ -229,12 +229,6 @@ impl SourceMap {
     /// as the source location requested.
     pub fn span_start(&self, span: SourceSpan) -> SourceLocation {
         self.location(span.start)
-    }
-
-    /// Turns a span into a source location based on the end of the span
-    /// as the source location requested.
-    pub fn span_end(&self, span: SourceSpan) -> SourceLocation {
-        self.location(span.end)
     }
 }
 
@@ -593,33 +587,30 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         let mut output = Vec::new();
 
         // Split all lines to insert @source_loc in with the byte offset appended to the line
-        let lines = body.lines().map(|line| {
-            let offset = body.len() as usize - line.as_ptr() as usize;
-            (line, offset)
-        });
+        let mut line_offset = 0usize;
 
-        for (line, offset) in lines {
-            // no content
-            if line.trim().is_empty() {
-                output.push(line.to_string());
-                continue;
+        // Go over each linee
+        for raw_line in body.split_inclusive('\n') {
+            let line_with_no_newline = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+            let line = line_with_no_newline
+                .strip_suffix('\r')
+                .unwrap_or(line_with_no_newline);
+
+            if !line.trim().is_empty() {
+                // the total number of leading whitespace chars
+                let leading_whitespace = line.len() - line.trim_start().len();
+
+                // actual offset for the real line contents
+                let source_offset = body_span.start + line_offset + leading_whitespace;
+
+                let location = self.source_map.location(source_offset);
+
+                // rebuild line with loc
+                output.push(format!("@source_loc {} {}", location.line, location.column));
             }
 
-            // the total number of leading whitespace chars
-            let leading_whitespace = line.len() - line.trim().as_ptr() as usize;
-
-            // actual offset for the real line contents
-            let source_offset = body_span
-                .start
-                .saturating_add(offset)
-                .saturating_add(leading_whitespace);
-
-            let location = self.source_map.location(source_offset);
-
-            // rebuild line with loc
-            output.push(format!("@source_loc {} {}", location.line, location.column));
-
             output.push(line.to_string());
+            line_offset += raw_line.len();
         }
 
         Ok(output.join("\n"))
@@ -796,7 +787,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             SimpleStatement::Expression(expr) => self.lower_expression_statement(expr, context)?,
         };
 
-        Ok(self.with_source_location(span, code))
+        Ok(code)
     }
 
     //// Lowers an assignment statement in the current function context
@@ -1439,25 +1430,32 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             }
             Expression::FieldAccess { receiver, field } => {
                 self.lower_field_access(receiver, field, span, context)?
-            },
+            }
             Expression::MethodCall {
                 receiver,
                 method,
                 arguments,
             } => self.lower_method_call(receiver, method, arguments, span, context)?,
-            Expression::Index { array, index } => todo!(),
-            Expression::Unary { operator, operand } => todo!(),
+            Expression::Index { array, index } => {
+                self.lower_array_index_expr(array, index, context)?
+            }
+            Expression::Unary { operator, operand } => {
+                self.lower_unary_expr(*operator, operand, span, context)?
+            }
             Expression::Binary {
                 left,
                 operator,
                 right,
-            } => todo!(),
+            } => self.lower_binary_expr(left, *operator, right, span, context)?,
             Expression::Conditional {
                 condition,
                 when_true,
                 when_false,
-            } => todo!(),
-            Expression::Cast { expression, target_type } => todo!(),
+            } => self.lower_conditional_expr(condition, when_true, when_false, context)?,
+            Expression::Cast {
+                expression,
+                target_type,
+            } => self.lower_cast_expr(expression, target_type, span, context)?,
             Expression::Boson3 {
                 declared_type,
                 body,
@@ -1513,6 +1511,148 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 name: name.to_string(),
             },
             span,
+        ))
+    }
+
+    /// Lowers one expression reinterpretation/cast down in the current context of a function
+    fn lower_cast_expr(
+        &self,
+        expression: &Located<Expression>,
+        target_type: &TypeName,
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        // target value we are casting
+        let value = self.expect_lowered_expression_value(
+            expression,
+            context,
+            TypeMismatchSource::CastTarget,
+        )?;
+
+        // Target type we are casting to with this new expression
+        let target_type = target_type.canonicalise(&self.module.namespace);
+
+        // Void casts are illegal, as thats just drop bruh
+        if target_type == TypeName::Void {
+            return Err(PhotonErrorKind::error(PhotonErrorKind::VoidCast, span));
+        }
+
+        Ok(LoweredExpression {
+            code: value.code,
+            value_type: target_type,
+        })
+    }
+
+    /// Lowers one array index access expression in the current context of a function
+    fn lower_array_index_expr(
+        &self,
+        array: &Box<Located<Expression>>,
+        index: &Box<Located<Expression>>,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        // lower array and index down
+        let (array, index) =
+            self.lower_array_index(array, index, context, TypeMismatchSource::ArrayIndexExpr)?;
+
+        // simple get at index
+        Ok(LoweredExpression::value(
+            format!(
+                "!std::array_get {} [ {} ]",
+                block(&array.code),
+                block(&index.code)
+            ),
+            TypeName::Any,
+        ))
+    }
+
+    /// Lowers one conditional  expression in the current context of a function
+    fn lower_conditional_expr(
+        &self,
+        condition: &Box<Located<Expression>>,
+        when_true: &Box<Located<Expression>>,
+        when_false: &Box<Located<Expression>>,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        // condition
+        let condition = self.expect_lowered_expression_type(
+            condition,
+            &TypeName::Bool,
+            context,
+            TypeMismatchSource::ConditionExpressionOfTheConditionalExpression,
+        )?;
+
+        // branches when true
+        let when_true = self.expect_lowered_expression_value(
+            when_true,
+            context,
+            TypeMismatchSource::TrueBranchCondExpr,
+        )?;
+
+        let when_false = self.expect_lowered_expression_value(
+            when_false,
+            context,
+            TypeMismatchSource::FalseBranchCondExpr,
+        )?;
+
+        // resulting type can only be known if both types match (else its either)
+        let result_type = if when_true.value_type == when_false.value_type {
+            when_true.value_type.clone()
+        } else {
+            TypeName::Any
+        };
+
+        Ok(LoweredExpression::value(
+            format!(
+                "!std::choose {} ? {} : {}",
+                block(&condition.code),
+                block(&when_true.code),
+                block(&when_false.code)
+            ),
+            result_type,
+        ))
+    }
+
+    /// Lowers one unary expression in the current context of a function
+    fn lower_unary_expr(
+        &self,
+        operator: UnaryOperator,
+        operand: &Box<Located<Expression>>,
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        // Get the operand we are applying the unary expression to
+        let operand = self.expect_lowered_expression_value(
+            operand,
+            context,
+            TypeMismatchSource::UnaryOperand,
+        )?;
+
+        let operand_type = &operand.value_type;
+
+        // Get the associated macro name and text for the operator along with the resulting type
+        let (macro_name, operator_text, result_type) = match (operator, operand_type) {
+            (UnaryOperator::Negate, TypeName::Int) => ("int_unary", "-", TypeName::Int),
+            (UnaryOperator::Negate, TypeName::Float) => ("float_unary", "-", TypeName::Float),
+            (UnaryOperator::LogicalNot, TypeName::Bool) => ("bool_unary", "!", TypeName::Bool),
+            (UnaryOperator::BitwiseNot, TypeName::Int) => ("int_unary", "~", TypeName::Int),
+            (UnaryOperator::BitwiseNot, TypeName::UInt) => ("uint_unary", "~", TypeName::UInt),
+            _ => {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::UnaryOperatorTypeMismatch {
+                        type_name: operand_type.clone(),
+                        operator,
+                    },
+                    span,
+                ));
+            }
+        };
+
+        Ok(LoweredExpression::value(
+            format!(
+                "!std::{macro_name} {operator_text} {}",
+                block(&operand.code)
+            ),
+            result_type,
         ))
     }
 
@@ -1943,6 +2083,118 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         ))
     }
 
+    /// Lowers a binary operation expression in the current context of a function
+    fn lower_binary_expr(
+        &self,
+        left: &Located<Expression>,
+        operator: BinaryOperator,
+        right: &Located<Expression>,
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        // Turn operands into actual lowered expressions first to use.
+        let left =
+            self.expect_lowered_expression_value(left, context, TypeMismatchSource::BinOpLHS)?;
+        let right =
+            self.expect_lowered_expression_value(right, context, TypeMismatchSource::BinOpRHS)?;
+
+        // The array append operator, applies to array types
+        if operator == BinaryOperator::ArrayAppend {
+            if left.value_type != TypeName::Array || right.value_type != TypeName::Array {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::ArrayAppendToNonBothArrayOperands {
+                        lhs: left.value_type,
+                        rhs: right.value_type,
+                    },
+                    span,
+                ));
+            }
+
+            return Ok(LoweredExpression::value(
+                format!(
+                    "!std::array_append {} {}",
+                    block(&left.code),
+                    block(&right.code)
+                ),
+                TypeName::Array,
+            ));
+        }
+
+        // Non-matching binop types, not permitted!
+        if left.value_type != right.value_type {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::BinaryOpMismatch {
+                    operator,
+                    lhs: left.value_type,
+                    rhs: right.value_type,
+                },
+                span,
+            ));
+        }
+
+        // get the underlying expr macro to use and the result of this operation
+        let (macro_name, result_type) = match left.value_type {
+            TypeName::Int if operator.is_numeric() => (
+                "int_expr",
+                // comp 2 ints vs produce new int
+                if operator.is_comparison() {
+                    TypeName::Bool
+                } else {
+                    TypeName::Int
+                },
+            ),
+            TypeName::UInt if operator.is_numeric() => (
+                "uint_expr",
+                if operator.is_comparison() {
+                    TypeName::Bool
+                } else {
+                    TypeName::UInt
+                },
+            ),
+            TypeName::Float if operator.is_float() => (
+                "float_expr",
+                if operator.is_comparison() {
+                    TypeName::Bool
+                } else {
+                    TypeName::Float
+                },
+            ),
+            // Booleans have OR/AND
+            TypeName::Bool
+                if matches!(
+                    operator,
+                    BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr
+                ) =>
+            {
+                ("bool_expr", TypeName::Bool)
+            }
+            // Tag equality
+            TypeName::Tag
+                if matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual) =>
+            {
+                ("tag_expr", TypeName::Bool)
+            }
+            _ => {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::BinaryOperatorUndefinedForType {
+                        operator,
+                        operand_type: left.value_type.clone(),
+                    },
+                    span,
+                ));
+            }
+        };
+
+        Ok(LoweredExpression::value(
+            format!(
+                "!std::{macro_name} {} {operator} {}",
+                block(&left.code),
+                block(&right.code)
+            ),
+            result_type,
+        ))
+    }
+
     /// Outputs one lowered string from some code and a span that
     /// contains the @source_loc decorative directive for the full source location
     /// from the original photon3 file to pass through to the final lepton3 binary
@@ -2250,5 +2502,14 @@ impl Display for Intrinsic {
         };
 
         write!(f, "`{intrinsic_name}`")
+    }
+}
+
+/// Whether or not this type expects another type (that
+/// is sthat passing this type to another type is allowed)
+fn type_accepts(expected: &TypeName, actual: &TypeName) -> bool {
+    match expected {
+        TypeName::Any => actual != &TypeName::Void,
+        _ => expected == actual,
     }
 }

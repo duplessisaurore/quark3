@@ -561,3 +561,61 @@ impl TypeName {
         }
     }
 }
+
+impl BinaryOperator {
+    /// Returns whether or not this binary operator can be applied to two Numeric operands 
+    /// 
+    /// This is seperate to floats! (for Int/UInt)
+    pub fn is_numeric(&self) -> bool {
+        matches!(
+            self,
+            BinaryOperator::Multiply
+                | BinaryOperator::Divide
+                | BinaryOperator::Remainder
+                | BinaryOperator::Add
+                | BinaryOperator::Subtract
+                | BinaryOperator::ShiftLeft
+                | BinaryOperator::ShiftRight
+                | BinaryOperator::Less
+                | BinaryOperator::LessEqual
+                | BinaryOperator::Greater
+                | BinaryOperator::GreaterEqual
+                | BinaryOperator::Equal
+                | BinaryOperator::NotEqual
+                | BinaryOperator::BitwiseAnd
+                | BinaryOperator::BitwiseXor
+                | BinaryOperator::BitwiseOr
+        )
+    }
+
+    /// Returns whether or not this binary operator can be applied to two Float operands 
+    pub fn is_float(&self) -> bool {
+        matches!(
+            self,
+            BinaryOperator::Multiply
+                | BinaryOperator::Divide
+                | BinaryOperator::Remainder
+                | BinaryOperator::Add
+                | BinaryOperator::Subtract
+                | BinaryOperator::Less
+                | BinaryOperator::LessEqual
+                | BinaryOperator::Greater
+                | BinaryOperator::GreaterEqual
+                | BinaryOperator::Equal
+                | BinaryOperator::NotEqual
+        )
+    }
+
+    /// Returns whether or not this binary operator is a comparison operator
+    pub fn is_comparison(&self) -> bool {
+        matches!(
+            self,
+            BinaryOperator::Less
+                | BinaryOperator::LessEqual
+                | BinaryOperator::Greater
+                | BinaryOperator::GreaterEqual
+                | BinaryOperator::Equal
+                | BinaryOperator::NotEqual
+        )
+    }
+}

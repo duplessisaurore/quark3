@@ -113,15 +113,65 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // These are the names of the temporaries/output (l3)
     let name = &manifest.name;
+    let photon_output_dir = build_dir.join("photon3");
     let linked_path = build_dir.join(format!("{name}.linked.boson3"));
     let lowered_path = build_dir.join(format!("{name}.quark3"));
     let image_path = build_dir.join(format!("{name}.lepton3"));
 
     // Run all build tools
 
+    // run photon3 first to lower all photon3 files to boson3
+    let (photon_files, mut link_files): (Vec<PathBuf>, Vec<PathBuf>) =
+        files.into_iter().partition(|path| is_photon_source(path));
+
+    if !photon_files.is_empty() {
+        // obliterate all photon3 files every build, else we may get stale bad things
+        recreate_directory(&photon_output_dir);
+
+        // run photon3
+
+        let mut photon = Command::new("photon3");
+        photon
+            .args(&photon_files)
+            .arg("--output-dir")
+            .arg(&photon_output_dir);
+
+        verbose_print(format!("collider3 >> running {:?}", photon), verbose);
+        run(photon);
+
+        // get all the generated boson3 files
+        
+        let mut generated_boson_files =
+            files_in_directory_with_extension(&photon_output_dir, "boson3");
+
+        if generated_boson_files.is_empty() {
+            eprintln!(
+                "photon3 succeeded but produced no .boson3 files in {}",
+                photon_output_dir.display()
+            );
+            process::exit(1);
+        }
+
+        verbose_print(
+            format!(
+                "collider3 >> photon3 produced {} Boson3 file(s)",
+                generated_boson_files.len()
+            ),
+            verbose,
+        );
+
+         link_files.append(&mut generated_boson_files);
+    }
+
     // link
+    if link_files.is_empty() {
+        eprintln!("error: no Boson3 files available for linking");
+        process::exit(1);
+    }
+
+    // Link native Boson3 and Photon3-generated Boson3 together.
     let mut gluon = Command::new("gluon3");
-    gluon.args(&files).arg("--output").arg(&linked_path);
+    gluon.args(&link_files).arg("--output").arg(&linked_path);
 
     verbose_print(format!("collider3 >> running {:?}", gluon), verbose);
     run(gluon);
@@ -240,4 +290,57 @@ fn verbose_print(out: String, verbose: bool) {
     if verbose {
         println!("{}", out)
     };
+}
+
+/// Removes `path` if it already exists, then recreates it empty.
+fn recreate_directory(path: &Path) {
+    if path.exists() {
+        fs::remove_dir_all(path).unwrap_or_else(|error| {
+            eprintln!("error cleaning {}: {error}", path.display());
+            process::exit(1);
+        });
+    }
+
+    fs::create_dir_all(path).unwrap_or_else(|error| {
+        eprintln!("error creating {}: {error}", path.display());
+        process::exit(1);
+    });
+}
+
+/// Returns whether this source should first be lowered through Photon3.
+fn is_photon_source(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("p3") | Some("photon3")
+    )
+}
+
+/// Returns files directly inside `directory` with the requested extension.
+fn files_in_directory_with_extension(directory: &Path, extension: &str) -> Vec<PathBuf> {
+    let entries = fs::read_dir(directory).unwrap_or_else(|error| {
+        eprintln!("error reading {}: {error}", directory.display());
+        process::exit(1);
+    });
+
+    let mut files = entries
+        .map(|entry| {
+            entry.unwrap_or_else(|error| {
+                eprintln!(
+                    "error reading directory entry in {}: {error}",
+                    directory.display()
+                );
+                process::exit(1);
+            })
+        })
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            path.extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value == extension)
+        })
+        .collect::<Vec<_>>();
+
+    files.sort();
+    files
 }

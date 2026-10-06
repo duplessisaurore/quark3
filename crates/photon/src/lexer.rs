@@ -347,12 +347,7 @@ impl<'src> Lexer<'src> {
 
             // now we parse the type, types cannot have spaces
 
-            let mut type_string = String::new();
-            while let Some(type_char) = self.advance()
-                && is_valid_ident_char(type_char)
-            {
-                type_string.push(type_char);
-            }
+            let type_string = self.consume_while(is_valid_ident_char);
 
             // No type was found to be here.
             if type_string.is_empty() {
@@ -414,8 +409,6 @@ impl<'src> Lexer<'src> {
         let mut depth = 1usize;
 
         while let Some(char) = self.advance() {
-            self.skip_whitespace_comments();
-
             if self.try_advance_str("@string") {
                 // advance until next line
                 while let Some(string_char) = self.advance()
@@ -433,11 +426,13 @@ impl<'src> Lexer<'src> {
 
                     // Found matching brace exit
                     if depth == 0 {
-                        return Some(self.source[start_point..self.current_pos()].to_string());
+                        return Some(self.source[start_point..self.current_pos() - 1].to_string());
                     }
                 }
                 _ => {}
             }
+
+            self.skip_whitespace_comments();
         }
 
         self.chars = restore_point;
@@ -544,18 +539,15 @@ impl<'src> Lexer<'src> {
         self.check_trailing_garbage(start, "invalid trailing characters after numeric literal")?;
 
         // Produce the actual token from the text we built up while advancing
-        if has_u_suffix {
-            let value: u64 = text.parse().unwrap_or(0);
-            self.push_token(TokenKind::UIntLiteral(value), start);
-        }
-
-        if is_float {
-            let value: f64 = text.parse().unwrap_or(f64::NAN);
-            self.push_token(TokenKind::FloatLiteral(value), start);
+        let token = if has_u_suffix {
+            TokenKind::UIntLiteral(text.parse().unwrap_or(0))
+        } else if is_float {
+            TokenKind::FloatLiteral(text.parse().unwrap_or(f64::NAN))
         } else {
-            let value: i64 = text.parse().unwrap_or(0);
-            self.push_token(TokenKind::IntLiteral(value), start);
-        }
+            TokenKind::IntLiteral(text.parse().unwrap_or(0))
+        };
+
+        self.push_token(token, start);
 
         Ok(())
     }
@@ -687,12 +679,7 @@ impl<'src> Lexer<'src> {
         let start = self.current_pos();
 
         // grab all ident char at this position
-        let mut text = String::new();
-        while let Some(char) = self.advance()
-            && is_valid_ident_char(char)
-        {
-            text.push(char);
-        }
+        let text = self.consume_while(is_valid_ident_char);
 
         let token = match text.as_str() {
             "true" => TokenKind::BoolLiteral(true),
@@ -824,15 +811,30 @@ impl<'src> Lexer<'src> {
         }
 
         // Grab the name of this directive
-        let mut name = String::new();
-        while let Some(char) = self.advance()
-            && is_valid_ident_char(char)
-        {
-            name.push(char);
-        }
+        let name = self.consume_while(is_valid_ident_char);
 
         self.push_token(TokenKind::Directive(name), start);
         Ok(())
+    }
+
+    /// Consumes tokens which match predicate together into a String
+    /// does not overreach
+    fn consume_while(
+        &mut self,
+        mut predicate: impl FnMut(char) -> bool,
+    ) -> String {
+        let mut text = String::new();
+
+        while let Some(c) = self.peek_char() {
+            if !predicate(c) {
+                break;
+            }
+
+            text.push(c);
+            self.advance();
+        }
+
+        text
     }
 }
 

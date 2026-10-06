@@ -4,7 +4,12 @@
 use std::fmt::Display;
 
 use crate::{
-    ast::{AssignmentOperator, Located, QualifiedName, SourceSpan, StepOperator, TypeName}, lexer::TokenKind, lowerer::Intrinsic,
+    ast::{
+        AssignmentOperator, BinaryOperator, Located, QualifiedName, SourceSpan, StepOperator,
+        TypeName, UnaryOperator,
+    },
+    lexer::TokenKind,
+    lowerer::Intrinsic,
 };
 
 /// All possible error kinds that can occur during
@@ -134,10 +139,7 @@ pub enum PhotonErrorKind {
     },
 
     /// Attempted to reference a field which does not exist
-    UnknownObjectField {
-        name: QualifiedName,
-        field: String,
-    },
+    UnknownObjectField { name: QualifiedName, field: String },
 
     /// Attempted to call a function with an invalid nubmer
     /// of arguments!
@@ -171,13 +173,20 @@ pub enum PhotonErrorKind {
 
     /// A global was looked up but it could not be found!
     UnknownGlobal { name: String },
-    
+
     /// A type mismatch for a step operator! It isn't defined
     /// for this type which is used for this local
     StepOperatorTypeMismatch {
         type_name: TypeName,
         operator: StepOperator,
         local_name: String,
+    },
+
+    /// A type mismatch for a unar operator! It isn't defined
+    /// for this type which is used for this local
+    UnaryOperatorTypeMismatch {
+        type_name: TypeName,
+        operator: UnaryOperator,
     },
 
     /// A type mismatch for a compound operator! It isn't defined
@@ -189,15 +198,11 @@ pub enum PhotonErrorKind {
 
     /// Found the usage of a field assignment to a non-object type when
     /// trying to assign using object-field assignment syntax
-    FieldAssignmentToNonObjectType {
-        found: TypeName
-    },
+    FieldAssignmentToNonObjectType { found: TypeName },
 
     /// Found the usage of a field access to a non-object type when
     /// trying to access using object-field access syntax
-    FieldAccessToNonObjectType {
-        found: TypeName
-    },
+    FieldAccessToNonObjectType { found: TypeName },
 
     /// Invalid assignment target, non-array, object, local or global
     InvalidAssignmentTarget,
@@ -208,8 +213,27 @@ pub enum PhotonErrorKind {
     /// Invalid conversion type for specific intrinsic
     InvalidTypeForConversionIntrinsic {
         intrinsic: Intrinsic,
-        found: TypeName
-    }
+        found: TypeName,
+    },
+
+    /// A cast of a value to Void...
+    VoidCast,
+
+    /// Array append operator can only be applied to two arrays
+    ArrayAppendToNonBothArrayOperands { lhs: TypeName, rhs: TypeName },
+
+    /// Binary operator can only be applied to two of the same types
+    BinaryOpMismatch {
+        operator: BinaryOperator,
+        lhs: TypeName,
+        rhs: TypeName,
+    },
+
+    /// Using binary operator on a type where it is not defined
+    BinaryOperatorUndefinedForType {
+        operator: BinaryOperator,
+        operand_type: TypeName,
+    },
 }
 
 /// Located version of `PhotonErrorKind` w source span info
@@ -259,7 +283,7 @@ impl Display for PhotonErrorKind {
             Self::UnexpectedToken { found, expected } => {
                 write!(
                     f,
-                    "unexpected {found} at the current position, there should have been a {expected}!"
+                    "unexpected `{found}` at the current position, there should have been a `{expected}`!"
                 )
             }
             Self::UnknownTLD { name } => {
@@ -280,7 +304,7 @@ impl Display for PhotonErrorKind {
             Self::UnexpectedDirective { found, expected } => {
                 write!(
                     f,
-                    "unexpected @{found} directive at the current position, there should have been an @{expected}!"
+                    "unexpected `@{found}` directive at the current position, there should have been an `@{expected}`!"
                 )
             }
             Self::InvalidCapabilityNumber { found } => {
@@ -393,10 +417,10 @@ impl Display for PhotonErrorKind {
             Self::UnknownObject { name } => {
                 write!(f, "found reference to unknown object `{name}`")
             }
-           Self::UnknownCallable { name } => {
+            Self::UnknownCallable { name } => {
                 write!(
                     f,
-                    "found reference to unknown function or a object under the name `{name}`, however an existing function/object already exists under the same name! because the object constructor is a call it's impossible to resolve this, so this callable case is illegal!"
+                    "found reference to unknown function or a object under the name `{name}`!"
                 )
             }
             Self::NumArgumentCallMismatch { expected, found } => {
@@ -439,6 +463,15 @@ impl Display for PhotonErrorKind {
                     "attempted to use step operator `{operator}` on local `{local_name}` with type `{type_name}`, however the operator is not defined for this type!"
                 )
             }
+            Self::UnaryOperatorTypeMismatch {
+                type_name,
+                operator,
+            } => {
+                write!(
+                    f,
+                    "attempted to use unary operator `{operator}` on type `{type_name}`, however the operator is not defined for this type!"
+                )
+            }
             Self::CompoundAssignmentOperatorTypeMismatch {
                 type_name,
                 operator,
@@ -449,10 +482,7 @@ impl Display for PhotonErrorKind {
                 )
             }
             Self::UnknownLocal { name } => {
-                write!(
-                    f,
-                    "found reference to unknown local `{name}`"
-                )
+                write!(f, "found reference to unknown local `{name}`")
             }
             Self::UnknownAssignmentTarget { name } => {
                 write!(
@@ -467,10 +497,7 @@ impl Display for PhotonErrorKind {
                 )
             }
             Self::UnknownGlobal { name } => {
-                write!(
-                    f,
-                    "found reference to unknown global `{name}`"
-                )
+                write!(f, "found reference to unknown global `{name}`")
             }
             Self::FieldAssignmentToNonObjectType { found } => {
                 write!(
@@ -485,19 +512,52 @@ impl Display for PhotonErrorKind {
                 )
             }
             Self::UnknownObjectField { name, field } => {
-                                write!(
+                write!(
                     f,
                     "found reference to unknown field `{field}` on object with type `{name}`"
                 )
             }
             Self::InvalidAssignmentTarget => {
-                write!(f, "invalid assignment target, assignment target must be a local, global, object field, or array element")
+                write!(
+                    f,
+                    "invalid assignment target, assignment target must be a local, global, object field, or array element"
+                )
             }
             Self::InvalidNonNameCallTarget => {
-                write!(f, "invalid call target, call targets must be a direct name (function/object constructor).")
+                write!(
+                    f,
+                    "invalid call target, call targets must be a direct name (function/object constructor)."
+                )
             }
             Self::InvalidTypeForConversionIntrinsic { intrinsic, found } => {
-                write!(f, "invalid type lhs for conversion intrinsic `{intrinsic}`, got lhs type of `{found}`")
+                write!(
+                    f,
+                    "invalid type lhs for conversion intrinsic `{intrinsic}`, got lhs type of `{found}`"
+                )
+            }
+            Self::VoidCast => {
+                write!(f, "attempted invalid cast of value to type of Void")
+            }
+            Self::ArrayAppendToNonBothArrayOperands { lhs, rhs } => {
+                write!(
+                    f,
+                    "attemped array append `++` to non-array operands! got lhs of `{lhs}` and rhs of `{rhs}`"
+                )
+            }
+            Self::BinaryOpMismatch { operator, lhs, rhs } => {
+                write!(
+                    f,
+                    "attemped operator usage `{operator}` to mismatching typed operands! got lhs of `{lhs}` and rhs of `{rhs}`"
+                )
+            }
+            Self::BinaryOperatorUndefinedForType {
+                operator,
+                operand_type,
+            } => {
+                write!(
+                    f,
+                    "attempted usage of operator `{operator}` on type operands of type `{operand_type}` where it is not defined"
+                )
             }
         }
     }
@@ -558,36 +618,24 @@ pub enum TypeMismatchSource {
 
     /// In the position of an array literal expression
     ArrayLiteralExpression,
-    
+
     /// As the argument to this intrinsic call
-    IntrinsicArgument {
-        intrinsic: Intrinsic
-    },
+    IntrinsicArgument { intrinsic: Intrinsic },
 
     /// As the condition to an assert expression
     AssertCondition,
-    
+
     /// As the arguments to an object constructor
-    ObjectConstructorArguments {
-        name: QualifiedName
-    },
+    ObjectConstructorArguments { name: QualifiedName },
 
     /// As the arguments to a function call
-    FunctionCallArguments {
-        name: QualifiedName
-    },
+    FunctionCallArguments { name: QualifiedName },
 
     /// As this field of to an object constructor
-    ObjectConstructorField {
-        name: QualifiedName,
-        field: String
-    },
+    ObjectConstructorField { name: QualifiedName, field: String },
 
     /// As this param # to a function
-    FunctionCallArgument {
-        name: QualifiedName,
-        argn: usize
-    },
+    FunctionCallArgument { name: QualifiedName, argn: usize },
 
     /// A normal method call on an object which is the reciever
     MethodCallReceiver,
@@ -599,9 +647,31 @@ pub enum TypeMismatchSource {
     ArrayPrependArgument,
 
     /// As the reciever of a normal field access
-    FieldAccessReciever {
-        field: String
-    }
+    FieldAccessReciever { field: String },
+
+    /// As the LHS reciever/target of a cast
+    CastTarget,
+
+    /// As part of an array indexing expresion
+    ArrayIndexExpr,
+
+    /// The condition expression of a conditional expression
+    ConditionExpressionOfTheConditionalExpression,
+
+    /// The true branch of the conditional expression
+    TrueBranchCondExpr,
+
+    /// The false branch of the conditional expression
+    FalseBranchCondExpr,
+
+    /// The operand to apply a unary operation to
+    UnaryOperand,
+
+    /// LHS of a binary op
+    BinOpLHS,
+
+    /// RHS of a binary op
+    BinOpRHS,
 }
 
 impl Display for TypeMismatchSource {
@@ -638,37 +708,61 @@ impl Display for TypeMismatchSource {
                 write!(f, "The initialiser of a local declaration")
             }
             TypeMismatchSource::ArrayIndex { source } => {
-                write!(f, "The array index of a an array used in the position of `{source}`")
+                write!(
+                    f,
+                    "The array index of a an array used in the position of `{source}`"
+                )
             }
             TypeMismatchSource::AssignmentRHS => {
                 write!(f, "The right-hand side of an assignment")
             }
             TypeMismatchSource::FieldAssignmentReciever => {
-                write!(f, "The left-hand side of an assignment as an object for a field assignment")   
+                write!(
+                    f,
+                    "The left-hand side of an assignment as an object for a field assignment"
+                )
             }
             TypeMismatchSource::ArrayIndexAssignmentReciever => {
-                write!(f, "The left-hand side of an assignment as an array for a field assignment")   
+                write!(
+                    f,
+                    "The left-hand side of an assignment as an array for a field assignment"
+                )
             }
             TypeMismatchSource::ArrayLiteralExpression => {
-                write!(f, "An array being constructed by an array literal expression")
+                write!(
+                    f,
+                    "An array being constructed by an array literal expression"
+                )
             }
             TypeMismatchSource::IntrinsicArgument { intrinsic } => {
                 write!(f, "As the argument to the intrinsic `{intrinsic}`")
             }
             TypeMismatchSource::AssertCondition => {
-                write!(f, "As the condition that is being asserted upon in the assert intrinsic call")
+                write!(
+                    f,
+                    "As the condition that is being asserted upon in the assert intrinsic call"
+                )
             }
             TypeMismatchSource::ObjectConstructorArguments { name } => {
-                write!(f, "As arguments to the object constructor for the object `{name}`")
-            },
+                write!(
+                    f,
+                    "As arguments to the object constructor for the object `{name}`"
+                )
+            }
             TypeMismatchSource::FunctionCallArguments { name } => {
                 write!(f, "As arguments to the function `{name}`")
-            },
+            }
             TypeMismatchSource::ObjectConstructorField { name, field } => {
-                write!(f, "Value for the field `{field}` for the object constructor for the object `{name}`")
-            },
+                write!(
+                    f,
+                    "Value for the field `{field}` for the object constructor for the object `{name}`"
+                )
+            }
             TypeMismatchSource::FunctionCallArgument { name, argn } => {
-                write!(f, "Argument for the parameter #`{argn}` for the function `{name}`")
+                write!(
+                    f,
+                    "Argument for the parameter #`{argn}` for the function `{name}`"
+                )
             }
             TypeMismatchSource::MethodCallReceiver => {
                 write!(f, "The reciever of a method call")
@@ -680,7 +774,34 @@ impl Display for TypeMismatchSource {
                 write!(f, "The argument to an array prepend call")
             }
             TypeMismatchSource::FieldAccessReciever { field } => {
-                write!(f, "The object reciever of the field access expression with the field `{field}`")
+                write!(
+                    f,
+                    "The object reciever of the field access expression with the field `{field}`"
+                )
+            }
+            TypeMismatchSource::CastTarget => {
+                write!(f, "The target/reciever of a cast operation")
+            }
+            TypeMismatchSource::ArrayIndexExpr => {
+                write!(f, "An array indexeing expression")
+            }
+            TypeMismatchSource::ConditionExpressionOfTheConditionalExpression => {
+                write!(f, " The condition expression of a conditional expression")
+            }
+            TypeMismatchSource::FalseBranchCondExpr => {
+                write!(f, "The false branch of a conditional expression")
+            }
+            TypeMismatchSource::TrueBranchCondExpr => {
+                write!(f, "The true branch of a conditional expression")
+            }
+            TypeMismatchSource::UnaryOperand => {
+                write!(f, "The operand to a unary expression")
+            }
+            TypeMismatchSource::BinOpLHS => {
+                write!(f, "The left-hand side operand to a binary expression")
+            }
+            TypeMismatchSource::BinOpRHS => {
+                write!(f, "The right-hand side operand to a binary expression")
             }
         }
     }
