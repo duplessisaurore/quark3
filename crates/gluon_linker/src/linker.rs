@@ -260,9 +260,15 @@ impl Linker {
             .expect("expected namespace to already have been gathered for file")
             .0;
 
+        // Set by @source_loc, applies to every following line until the next @source_loc.
+        let mut current_sloc_line = None;
+
         // The pass, remap all instructions now with names
         for (line_number, line) in file.file_contents.lines().enumerate() {
-            let line_number = line_number + 1;
+            let line_number = match current_sloc_line {
+                None => line_number + 1,
+                Some(sloc_line_num) => sloc_line_num
+            };
 
             // Strip the comment from a line and ignore if empty, this means
             // we only parse actual tokens
@@ -309,6 +315,7 @@ impl Linker {
                             }
                         };
 
+                        current_sloc_line = Some(source_line);
                         output.push(format!("@loc {file_index} {source_line} {source_col}"));
                     }
 

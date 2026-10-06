@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
 
         // Parse it
-        let ast = PhotonParser::new(&tokens)
+        let ast = PhotonParser::new(source_file.to_string_lossy().to_string(), &tokens)
             .parse_module()
             .unwrap_or_else(|e| {
                 eprintln!(
@@ -108,7 +108,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut output_path = output_dir.clone();
 
         // Write output file
-        output_path.push(format!("{}.boson3", module.namespace.to_string().replace("::", "_")));
+        output_path.push(format!(
+            "{}.boson3",
+            module.namespace.to_string().replace("::", "_")
+        ));
 
         fs::write(output_path.clone(), lowered_stuff.contents).unwrap_or_else(|e| {
             eprintln!("error writing {}: {e}", output_path.display());

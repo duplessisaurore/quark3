@@ -172,6 +172,7 @@ name = "gluon_linker"
 version = "2.3.0"
 dependencies = [
  "clap",
+ "regex",
 ]
 
 [[package]]

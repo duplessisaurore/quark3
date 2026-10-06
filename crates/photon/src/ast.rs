@@ -91,6 +91,7 @@ impl fmt::Display for TypeName {
 pub struct Module {
     pub items: Vec<Located<TopLevelItem>>,
     pub namespace: QualifiedName,
+    pub source_file: String,
 }
 
 /// All the possible top level items in a module of photon3 source code

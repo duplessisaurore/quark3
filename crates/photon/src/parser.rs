@@ -18,6 +18,9 @@ use crate::{
 
 /// The actual parser class itself
 pub struct Parser<'tokens> {
+    /// Original source file name
+    source_file_name: String,
+
     /// All of the tokens we are parsing
     tokens: &'tokens [Token],
 
@@ -31,8 +34,12 @@ pub struct Parser<'tokens> {
 impl<'tokens> Parser<'tokens> {
     /// Create a new parser over `tokens` that will parse all of the
     /// tokens into a singular `Module` for this file
-    pub fn new(tokens: &'tokens [Token]) -> Self {
-        Self { tokens, cursor: 0 }
+    pub fn new(source_file_name: String, tokens: &'tokens [Token]) -> Self {
+        Self {
+            source_file_name,
+            tokens,
+            cursor: 0,
+        }
     }
 
     /// Look at the current token without consuming it.
@@ -200,6 +207,7 @@ impl<'tokens> Parser<'tokens> {
         Ok(Module {
             items,
             namespace: module_namespace,
+            source_file: self.source_file_name.clone(),
         })
     }
 

@@ -433,6 +433,9 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     pub fn lower_to_string(&self) -> PhotonResult<LoweredModule> {
         let mut output_string = Vec::new();
 
+        // insert original source file location for module
+        output_string.push(format!("@original_source {}", self.module.source_file));
+
         // lower each individual TLI with smp
         for item in &self.module.items {
             output_string.push(self.lower_top_level_item(item)?);

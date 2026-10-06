@@ -16,6 +16,7 @@ use std::error::Error;
 pub mod linker;
 
 use clap::Parser;
+use regex::Regex;
 use std::{fs, path::PathBuf, process};
 
 use crate::linker::{LinkableFile, Linker};
@@ -40,29 +41,49 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input_paths = &cli.input;
     let output_path = &cli.output;
 
-    // Read source files
+    // we need this for later..
+    let original_source_regex = Regex::new(r"(?m)^\s*@original_source.*$")?;
+
+    // Read source files3
     let source_files = input_paths
         .iter()
         .map(|input_path| {
-            let file_contents = fs::read_to_string(input_path).unwrap_or_else(|e| {
+            let mut file_contents = fs::read_to_string(input_path).unwrap_or_else(|e| {
                 eprintln!("error reading {}: {e}", input_path.display());
                 process::exit(1);
             });
 
-            // Resolve the input path down.
-            let file_name = input_path
+            // check if original source line exists
+            let original_source_line = file_contents.lines().find(|line| {
+                line.trim().starts_with("@original_source")
+            }).map(|original_source| {
+                original_source.trim()
+                    .strip_prefix("@original_source")
+                    .expect(&format!("original source directive in file `{input_path:?}` must be followed by original file name!"))
+                    .to_string()
+            });
+
+            // Remove the original source line..
+            file_contents = original_source_regex.replace(&file_contents, "\n").to_string();
+            
+            // Resolve the input path down for file name
+            let file_name = original_source_line.clone().unwrap_or_else(|| input_path
                 .file_name()
                 .unwrap_or_else(|| {
                     eprintln!("unable to simplify input path {}", input_path.display());
                     process::exit(1);
                 })
                 .to_string_lossy()
-                .to_string();
+                .to_string()
+            );
+
+            // full file path for errors/file table
+            let full_file_name = original_source_line.unwrap_or_else(|| input_path.to_string_lossy().to_string());
 
             LinkableFile {
                 file_contents,
                 file_name,
-                full_file_name: input_path.to_string_lossy().to_string(),
+                full_file_name,
                 namespace: None,
                 remap_maps: None,
             }
