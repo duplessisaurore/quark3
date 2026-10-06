@@ -12,8 +12,9 @@ use std::collections::HashMap;
 
 use crate::{
     ast::{
-        Expression, FunctionDeclaration, Located, MethodName, Module, ObjectDeclaration, Parameter,
-        QualifiedName, SimpleStatement, SourceSpan, Statement, TopLevelItem, TypeName,
+        AssignmentOperator, Expression, FunctionDeclaration, Located, MethodName, Module,
+        ObjectDeclaration, Parameter, QualifiedName, SimpleStatement, SourceSpan, Statement,
+        StepOperator, TopLevelItem, TypeName,
     },
     errors::{PhotonErrorKind, PhotonResult, TypeMismatchSource},
 };
@@ -50,6 +51,20 @@ enum Intrinsic {
     FloatToUInt,
     IntToUInt,
     UIntToInt,
+}
+
+/// The current "global/local/object" state of an assignment
+#[derive(Debug, Clone)]
+enum AssignmentTarget {
+    Local,
+    Global,
+    Array {
+        array_index: String,
+    },
+    Object {
+        object_name: QualifiedName,
+        field_name: String,
+    },
 }
 
 /// The context of a function,
@@ -512,7 +527,9 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
         // convert statement type to specific string code ver
         let code = match &statement.value {
-            Statement::Simple(simple_statement) => todo!(),
+            Statement::Simple(simple_statement) => {
+                self.lower_simple_statement(simple_statement, span, context)?
+            }
             Statement::Return { value } => self.lower_return_statement(value, span, context)?,
             Statement::If {
                 condition,
@@ -654,7 +671,10 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     ) -> PhotonResult<String> {
         // initialiser
         let initializer = initializer
-            .map(|simple_statement| self.lower_simple_statement(simple_statement, context))
+            .as_ref()
+            .map(|simple_statement| {
+                self.lower_simple_statement(&simple_statement.value, simple_statement.span, context)
+            })
             .transpose()?
             .unwrap_or_default();
 
@@ -667,8 +687,10 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         )?;
 
         // The step component of the statement
-        let step = step
-            .map(|simple_statement| self.lower_simple_statement(simple_statement, context))
+        let step = Option::as_ref(step)
+            .map(|simple_statement| {
+                self.lower_simple_statement(&simple_statement.value, simple_statement.span, context)
+            })
             .transpose()?
             .unwrap_or_default();
 
@@ -731,6 +753,267 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             block(&condition.code),
             block(&body)
         ))
+    }
+
+    /// Lowers an expression as a statement in the current function context
+    ///
+    /// If the expression is non-void it's value is dropped, otherwise
+    /// the void expression is assumed to drop its value.
+    fn lower_expression_statement(
+        &self,
+        expression: &Located<Expression>,
+        context: &FunctionContext,
+    ) -> PhotonResult<String> {
+        let expression = self.lower_expression(expression, context)?;
+
+        // void should auto-drop per fn comment, and we dont want to stack underflow
+        if expression.is_void() {
+            Ok(expression.code)
+        } else {
+            Ok(format!("!std::drop {}", block(&expression.code)))
+        }
+    }
+
+    //// Lowers a simple statement in the current function context,
+    fn lower_simple_statement(
+        &self,
+        statement: &SimpleStatement,
+        span: SourceSpan,
+        context: &mut FunctionContext,
+    ) -> PhotonResult<String> {
+        // get code out from statement type
+        let code = match &statement {
+            SimpleStatement::Let {
+                name,
+                type_annotation,
+                initializer,
+            } => self.lower_let_statement(name, type_annotation, initializer, span, context)?,
+            SimpleStatement::Assignment {
+                target,
+                operator,
+                value,
+            } => self.lower_assignment(target, *operator, value, span, context)?,
+            SimpleStatement::Step { name, operator } => {
+                self.lower_step(name, *operator, span, context)?
+            }
+            SimpleStatement::Expression(expr) => self.lower_expression_statement(expr, context)?,
+        };
+
+        Ok(self.with_source_location(span, code))
+    }
+
+    //// Lowers an assignment statement in the current function context
+    fn lower_assignment(
+        &self,
+        target: &Located<Expression>,
+        operator: AssignmentOperator,
+        value: &Located<Expression>,
+        span: SourceSpan,
+        context: &mut FunctionContext,
+    ) -> PhotonResult<String> {
+        // The RHS value of the assignment, which we are assigning
+        // to `target` (some expr).
+        let value = self.expect_lowered_expression_value(
+            value,
+            context,
+            TypeMismatchSource::AssignmentRHS,
+        )?;
+
+        match &target.value {
+            // A direct name of which we assign to a local/global
+            Expression::Name(name) if name.is_unqualified() => {
+                // In the function context locals, assign to local.
+                if let Some(local_type) = context.locals.get(name.last()) {
+                    return assignment_macro(
+                        &value.code,
+                        &name.last().to_string(),
+                        local_type,
+                        AssignmentTarget::Local,
+                        operator,
+                        span,
+                    );
+                }
+
+                // Not a local? try globals, else it doesn't exist
+                let global_name = name.resolve(&self.module.namespace);
+                let global_type = self.symbols.global(&global_name).ok_or_else(|| {
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::UnknownAssignmentTarget {
+                            name: name.to_string(),
+                        },
+                        span,
+                    )
+                })?;
+
+                return assignment_macro(
+                    &value.code,
+                    &global_name.to_string(),
+                    global_type,
+                    AssignmentTarget::Global,
+                    operator,
+                    span,
+                );
+            }
+            // A qualified name/not quite direct, which we assume to be a global.
+            Expression::Name(name) => {
+                let global_name = name.resolve(&self.module.namespace);
+                let global_type = self.symbols.global(&global_name).ok_or_else(|| {
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::UnknownGlobal {
+                            name: global_name.to_string(),
+                        },
+                        span,
+                    )
+                })?;
+
+                return assignment_macro(
+                    &value.code,
+                    &global_name.to_string(),
+                    global_type,
+                    AssignmentTarget::Global,
+                    operator,
+                    span,
+                );
+            }
+
+            // field access, assignment to an object.
+            Expression::FieldAccess { receiver, field } => {
+                // resolve obj expr
+                let receiver = self.expect_lowered_expression_value(
+                    receiver,
+                    context,
+                    TypeMismatchSource::FieldAssignmentReciever,
+                )?;
+
+                // must be of an object type.
+                let object_name = receiver.value_type.object_name().ok_or_else(|| {
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::FieldAssignmentToNonObjectType {
+                            found: receiver.value_type.clone(),
+                        },
+                        span,
+                    )
+                })?;
+
+                let object = self.symbols.object(object_name).ok_or_else(|| {
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::UnknownObject {
+                            name: object_name.clone(),
+                        },
+                        span,
+                    )
+                })?;
+
+                // Ensure this object actually has this field
+                expect_object_field(object, field, target.span)?;
+
+                return assignment_macro(
+                    &value.code,
+                    &receiver.code,
+                    &receiver.value_type,
+                    AssignmentTarget::Object {
+                        object_name: object.name.clone(),
+                        field_name: field.clone(),
+                    },
+                    operator,
+                    span,
+                );
+            }
+
+            // Assignment to an array at an index
+            Expression::Index { array, index } => {
+                let (array, index) = self.lower_array_index(
+                    array,
+                    index,
+                    context,
+                    TypeMismatchSource::ArrayIndexAssignmentReciever,
+                )?;
+
+                return assignment_macro(
+                    &value.code,
+                    &array.code,
+                    &value.value_type,
+                    AssignmentTarget::Array {
+                        array_index: index.code,
+                    },
+                    operator,
+                    span,
+                );
+            }
+            _ => Err(PhotonErrorKind::error(
+                PhotonErrorKind::InvalidAssignmentTarget,
+                span,
+            )),
+        }
+    }
+
+    //// Lowers a step statement in the current function context
+    fn lower_step(
+        &self,
+        name: &str,
+        operator: StepOperator,
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<String> {
+        // Get the type of the local, as we have special intrinsic step to use based on it.
+        let local_type = context.locals.get(name).ok_or_else(|| {
+            PhotonErrorKind::error(
+                PhotonErrorKind::UnknownLocal {
+                    name: name.to_string(),
+                },
+                span,
+            )
+        })?;
+
+        // which step macro to use
+        let macro_name = match local_type {
+            TypeName::Int => "int_step",
+            TypeName::UInt => "uint_step",
+            other => {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::StepOperatorTypeMismatch {
+                        type_name: other.clone(),
+                        operator,
+                        local_name: name.to_string(),
+                    },
+                    span,
+                ));
+            }
+        };
+
+        Ok(format!("!std::{macro_name} {name} {operator}"))
+    }
+
+    //// Lowers a let statement in the current function context,
+    /// essentially just a declaration
+    fn lower_let_statement(
+        &self,
+        name: &str,
+        type_annotation: &Option<TypeName>,
+        initializer: &Located<Expression>,
+        span: SourceSpan,
+        context: &mut FunctionContext,
+    ) -> PhotonResult<String> {
+        // The initialiser should return a value (which matches the annotation if req)
+        let initializer = match type_annotation {
+            Some(decl_type) => self.expect_lowered_expression_type(
+                initializer,
+                decl_type,
+                context,
+                TypeMismatchSource::LetLocalInitialiser,
+            )?,
+            None => self.expect_lowered_expression_value(
+                initializer,
+                context,
+                TypeMismatchSource::LetLocalInitialiser,
+            )?,
+        };
+
+        // The local type is from the initialiser
+        let local_type = initializer.value_type.canonicalise(&self.module.namespace);
+
+        self.declare_local(name, local_type, span, context)?;
+        Ok(format!("!std::let {name} = {}", block(&initializer.code)))
     }
 
     /// Lowers an if statement in the current function context,
@@ -874,7 +1157,11 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 )?;
 
                 // lower and tailcall
-                let arguments = self.lower_arguments(arguments, context, TypeMismatchSource::TailCallArguments)?;
+                let arguments = self.lower_arguments(
+                    arguments,
+                    context,
+                    TypeMismatchSource::TailCallArguments,
+                )?;
                 Ok(Some(format!(
                     "!std::tailcall {resolved_name} ( {} )",
                     lowered_exprs_block(&arguments),
@@ -931,7 +1218,11 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 expect_argument_count(expected_argument_count, arguments.len(), expression.span)?;
 
                 // lower and tailmethod
-                let arguments = self.lower_arguments(arguments, context, TypeMismatchSource::TailCallMethodArguments)?;
+                let arguments = self.lower_arguments(
+                    arguments,
+                    context,
+                    TypeMismatchSource::TailCallMethodArguments,
+                )?;
 
                 Ok(Some(format!(
                     "!std::object_tailmethod {} -> {method_name} ( {} )",
@@ -957,7 +1248,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     ) -> PhotonResult<Vec<LoweredExpression>> {
         arguments
             .iter()
-            .map(|argument| self.expect_lowered_expression_value(argument, context, source))
+            .map(|argument| self.expect_lowered_expression_value(argument, context, source.clone()))
             .collect()
     }
 
@@ -1035,6 +1326,32 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 Ok(QualifiedName::new(segments))
             }
         }
+    }
+
+    /// Lowers a should-be array and should-be index expression
+    /// down into a pair of the lowered array and index expressions.
+    fn lower_array_index(
+        &self,
+        array: &Located<Expression>,
+        index: &Located<Expression>,
+        context: &FunctionContext,
+        source: TypeMismatchSource,
+    ) -> PhotonResult<(LoweredExpression, LoweredExpression)> {
+        // array
+        let array =
+            self.expect_lowered_expression_type(array, &TypeName::Array, context, source.clone())?;
+
+        // index
+        let index = self.expect_lowered_expression_type(
+            index,
+            &TypeName::UInt,
+            context,
+            TypeMismatchSource::ArrayIndex {
+                source: Box::new(source),
+            },
+        )?;
+
+        Ok((array, index))
     }
 
     /// Declares a local of some `name` in the current `context` of the function,
@@ -1160,4 +1477,160 @@ fn expect_argument_count(expected: usize, actual: usize, span: SourceSpan) -> Ph
             span,
         ))
     }
+}
+
+/// Returns the string for the assignment macro to use
+/// for the corresponding type `value_type`, what kind of `target` this is,
+/// and what `operator` we are assigning with.
+///
+/// The `span` should compromise of this full assignment
+///
+/// The `code` should be the direct code belonging to the rhs, which will be block'd
+///
+/// The `lhs` should be the thing we are assigning to.
+/// It is assumed to be valid.
+fn assignment_macro(
+    code: &String,
+    lhs: &String,
+    value_type: &TypeName,
+    target: AssignmentTarget,
+    operator: AssignmentOperator,
+    span: SourceSpan,
+) -> PhotonResult<String> {
+    // non-compound assignment
+    if operator == AssignmentOperator::Assign {
+        return Ok(match target {
+            AssignmentTarget::Object {
+                object_name,
+                field_name,
+            } => format!(
+                "!std::object_set {} -> {}.{} = {}",
+                block(lhs),
+                object_name,
+                field_name,
+                block(code)
+            ),
+            AssignmentTarget::Local => format!("!std::set {lhs} = {}", block(code)),
+            AssignmentTarget::Global => format!("!std::global_set {lhs} = {}", block(code)),
+            AssignmentTarget::Array { array_index } => format!(
+                "!std::array_set {} [ {} ] = {}",
+                block(lhs),
+                array_index,
+                block(code)
+            ),
+        });
+    }
+
+    // Get the underlying macro for the base "set" for
+    // the underlying compound assignment.
+    let macro_name = match (value_type, target) {
+        (TypeName::Int, AssignmentTarget::Local) => format!("int_set {lhs}"),
+        (TypeName::UInt, AssignmentTarget::Local) => format!("uint_set {lhs}"),
+        (TypeName::Float, AssignmentTarget::Local) => format!("float_set {lhs}"),
+        (TypeName::Int, AssignmentTarget::Global) => format!("int_global_set {lhs}"),
+        (TypeName::UInt, AssignmentTarget::Global) => format!("uint_global_set {lhs}"),
+        (TypeName::Float, AssignmentTarget::Global) => format!("float_global_set {lhs}"),
+        (
+            TypeName::Int,
+            AssignmentTarget::Object {
+                object_name,
+                field_name,
+            },
+        ) => format!(
+            "!std::object_int_set {} -> {}.{}",
+            block(lhs),
+            object_name,
+            field_name,
+        ),
+        (
+            TypeName::UInt,
+            AssignmentTarget::Object {
+                object_name,
+                field_name,
+            },
+        ) => format!(
+            "!std::object_uint_set {} -> {}.{}",
+            block(lhs),
+            object_name,
+            field_name,
+        ),
+        (
+            TypeName::Float,
+            AssignmentTarget::Object {
+                object_name,
+                field_name,
+            },
+        ) => format!(
+            "!std::object_float_set {} -> {}.{}",
+            block(lhs),
+            object_name,
+            field_name,
+        ),
+        (TypeName::Int, AssignmentTarget::Array { array_index }) => format!(
+            "!std::!std::array_int_set {} [ {} ]",
+            block(lhs),
+            array_index,
+        ),
+        (TypeName::UInt, AssignmentTarget::Array { array_index }) => format!(
+            "!std::!std::array_uint_set {} [ {} ]",
+            block(lhs),
+            array_index,
+        ),
+        (TypeName::Float, AssignmentTarget::Array { array_index }) => format!(
+            "!std::!std::array_float_set {} [ {} ]",
+            block(lhs),
+            array_index,
+        ),
+
+        // no valid ops for this type
+        (_, _) => {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::CompoundAssignmentOperatorTypeMismatch {
+                    type_name: value_type.clone(),
+                    operator,
+                },
+                span,
+            ));
+        }
+    };
+
+    // these operators are defined for the int types but not float.
+    if value_type == &TypeName::Float
+        && matches!(
+            operator,
+            AssignmentOperator::ShiftLeftAssign
+                | AssignmentOperator::ShiftRightAssign
+                | AssignmentOperator::BitwiseAndAssign
+                | AssignmentOperator::BitwiseOrAssign
+                | AssignmentOperator::BitwiseXorAssign
+        )
+    {
+        return Err(PhotonErrorKind::error(
+            PhotonErrorKind::CompoundAssignmentOperatorTypeMismatch {
+                type_name: value_type.clone(),
+                operator,
+            },
+            span,
+        ));
+    }
+
+    Ok(format!("!std::{macro_name} {operator} {}", block(code)))
+}
+
+/// Ensures an object, with the signature `object` contains
+/// a field with the name `field`, otherwise erroring
+fn expect_object_field<'a>(
+    object: &'a ObjectSignature,
+    field: &str,
+    span: SourceSpan,
+) -> PhotonResult<&'a TypeName> {
+    object.field_type(field).ok_or_else(|| {
+        PhotonErrorKind::error(
+            PhotonErrorKind::UnknownObjectField {
+                name: object.name.clone(),
+                field: field.to_string(),
+            },
+            span,
+        )
+    })
 }

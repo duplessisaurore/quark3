@@ -4,8 +4,7 @@
 use std::fmt::Display;
 
 use crate::{
-    ast::{Located, QualifiedName, SourceSpan, TypeName},
-    lexer::TokenKind,
+    ast::{AssignmentOperator, Located, QualifiedName, SourceSpan, StepOperator, TypeName}, lexer::TokenKind,
 };
 
 /// All possible error kinds that can occur during
@@ -121,8 +120,20 @@ pub enum PhotonErrorKind {
     /// Attempted to call a function with an unknown name
     UnknownFunction { name: QualifiedName },
 
+    /// Attempted to reference an object with an unknown name
+    UnknownObject { name: QualifiedName },
+
     /// Attempted to call a method with an unknown name
-    UnknownMethod { name: QualifiedName, method_type: TypeName },
+    UnknownMethod {
+        name: QualifiedName,
+        method_type: TypeName,
+    },
+
+    /// Attempted to reference a field which does not exist
+    UnknownObjectField {
+        name: QualifiedName,
+        field: String,
+    },
 
     /// Attempted to call a function with an invalid nubmer
     /// of arguments!
@@ -134,20 +145,49 @@ pub enum PhotonErrorKind {
     /// because they do not belong to a namespace
     InferringMethodOnNonObjectType {
         method_name: String,
-        reciever_type: TypeName
+        reciever_type: TypeName,
     },
 
     /// No namespace for an object, which means we cant figure
     /// out what namespace to look for, for methods!
-    InferringMethodOnObjectWithoutNamespace {
-        object_name: QualifiedName
-    },
+    InferringMethodOnObjectWithoutNamespace { object_name: QualifiedName },
 
     /// An expression in a position which is expected to produce
     /// a value did not in fact produce a value
-    ExpressionDidNotProduceValue {
-        source: TypeMismatchSource
-    }
+    ExpressionDidNotProduceValue { source: TypeMismatchSource },
+
+    /// A local was looked up but it could not be found!
+    UnknownLocal { name: String },
+
+    /// A name was attempted to be assigned to but it could not be found!
+    UnknownAssignmentTarget { name: String },
+
+    /// A global was looked up but it could not be found!
+    UnknownGlobal { name: String },
+    
+    /// A type mismatch for a step operator! It isn't defined
+    /// for this type which is used for this local
+    StepOperatorTypeMismatch {
+        type_name: TypeName,
+        operator: StepOperator,
+        local_name: String,
+    },
+
+    /// A type mismatch for a compound operator! It isn't defined
+    /// for this type
+    CompoundAssignmentOperatorTypeMismatch {
+        type_name: TypeName,
+        operator: AssignmentOperator,
+    },
+
+    /// Found the usage of a field assignment to a non-object type when
+    /// trying to assign using object-field assignment syntax
+    FieldAssignmentToNonObjectType {
+        found: TypeName
+    },
+
+    /// Invalid assignment target, non-array, object, local or global
+    InvalidAssignmentTarget
 }
 
 /// Located version of `PhotonErrorKind` w source span info
@@ -328,23 +368,90 @@ impl Display for PhotonErrorKind {
             Self::UnknownFunction { name } => {
                 write!(f, "found reference to unknown function `{name}`")
             }
+            Self::UnknownObject { name } => {
+                write!(f, "found reference to unknown object `{name}`")
+            }
             Self::NumArgumentCallMismatch { expected, found } => {
                 write!(f, "expected {expected} arguments, received {found}")
             }
             Self::UnknownMethod { name, method_type } => {
-                write!(f, "found reference to unknown method `{name}` on type `{method_type}`")
+                write!(
+                    f,
+                    "found reference to unknown method `{name}` on type `{method_type}`"
+                )
             }
-            Self::InferringMethodOnNonObjectType { method_name, reciever_type } => {
-                write!(f, "cannot infer method `{method_name}` because receiver type is `{reciever_type}` and is not a valid object-based type!")
+            Self::InferringMethodOnNonObjectType {
+                method_name,
+                reciever_type,
+            } => {
+                write!(
+                    f,
+                    "cannot infer method `{method_name}` because receiver type is `{reciever_type}` and is not a valid object-based type!"
+                )
             }
             Self::InferringMethodOnObjectWithoutNamespace { object_name } => {
-                write!(f, "cannot infer method name on object type `{object_name}` because it has no namespace for method lookup")
+                write!(
+                    f,
+                    "cannot infer method name on object type `{object_name}` because it has no namespace for method lookup"
+                )
             }
-            Self::ExpressionDidNotProduceValue { source }=> {
+            Self::ExpressionDidNotProduceValue { source } => {
                 write!(
                     f,
                     "expected expression in position of `{source}` to produce a value, but it did not!"
                 )
+            }
+            Self::StepOperatorTypeMismatch {
+                type_name,
+                operator,
+                local_name,
+            } => {
+                write!(
+                    f,
+                    "attempted to use step operator `{operator}` on local `{local_name}` with type `{type_name}`, however the operator is not defined for this type!"
+                )
+            }
+            Self::CompoundAssignmentOperatorTypeMismatch {
+                type_name,
+                operator,
+            } => {
+                write!(
+                    f,
+                    "attempted to use compound assignment operator `{operator}` with value of type `{type_name}`, however the operator is not defined for this type!"
+                )
+            }
+            Self::UnknownLocal { name } => {
+                write!(
+                    f,
+                    "found reference to unknown local `{name}`"
+                )
+            }
+            Self::UnknownAssignmentTarget { name } => {
+                write!(
+                    f,
+                    "found reference to unknown assignment target `{name}`, this could not be resolved to a local or a global"
+                )
+            }
+            Self::UnknownGlobal { name } => {
+                write!(
+                    f,
+                    "found reference to unknown global `{name}`"
+                )
+            }
+            Self::FieldAssignmentToNonObjectType { found } => {
+                write!(
+                    f,
+                    "unexpected illegal field assignment to non object type `{found}`"
+                )
+            }
+            Self::UnknownObjectField { name, field } => {
+                                write!(
+                    f,
+                    "found reference to unknown field `{field}` on object with type `{name}`"
+                )
+            }
+            Self::InvalidAssignmentTarget => {
+                write!(f, "invalid assignment target, assignment target must be a local, global, object field, or array element")
             }
         }
     }
@@ -359,7 +466,7 @@ impl Display for PhotonError {
 }
 
 /// Sources of type mistmatches down
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum TypeMismatchSource {
     /// The foreach source must be of the type Array
     ForEachArraySource,
@@ -387,6 +494,21 @@ pub enum TypeMismatchSource {
 
     /// In the position of a method tail call arguments
     TailCallMethodArguments,
+
+    /// In the position of an initialiser of a local
+    LetLocalInitialiser,
+
+    /// In the position of an index for this source of this array indeinxg op
+    ArrayIndex { source: Box<Self> },
+
+    /// In the position of the right-hand side of an assignment
+    AssignmentRHS,
+
+    /// In the position of a field assignment as the object we are assigning to
+    FieldAssignmentReciever,
+
+    /// In the position of a array index assignment as the array we are assigning to
+    ArrayIndexAssignmentReciever
 }
 
 impl Display for TypeMismatchSource {
@@ -418,6 +540,21 @@ impl Display for TypeMismatchSource {
             }
             TypeMismatchSource::TailCallMethodArguments => {
                 write!(f, "The arguments to a tail call on an object method")
+            }
+            TypeMismatchSource::LetLocalInitialiser => {
+                write!(f, "The initialiser of a local declaration")
+            }
+            TypeMismatchSource::ArrayIndex { source } => {
+                write!(f, "The array index of a an array used in the position of `{source}`")
+            }
+            TypeMismatchSource::AssignmentRHS => {
+                write!(f, "The right-hand side of an assignment")
+            }
+            TypeMismatchSource::FieldAssignmentReciever => {
+                write!(f, "The left-hand side of an assignment as an object for a field assignment")   
+            }
+            TypeMismatchSource::ArrayIndexAssignmentReciever => {
+                write!(f, "The left-hand side of an assignment as an array for a field assignment")   
             }
         }
     }
