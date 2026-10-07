@@ -816,7 +816,7 @@ impl<'tokens> Parser<'tokens> {
 
         // (<initialiser
         self.expect(&TokenKind::LeftParen)?;
-        let initializer = if self.check(&TokenKind::Semicolon) {
+        let initialiser = if self.check(&TokenKind::Semicolon) {
             None
         } else {
             Some(self.parse_simple_statement()?)
@@ -842,7 +842,7 @@ impl<'tokens> Parser<'tokens> {
 
         let statement = Located::new(
             Statement::For {
-                initializer,
+                initialiser,
                 condition,
                 step: Box::new(step),
                 body,
@@ -997,14 +997,14 @@ impl<'tokens> Parser<'tokens> {
         self.expect(&TokenKind::Assign)?;
 
         // the initialiser for the name
-        let initializer = self.parse_expression()?;
-        let end = initializer.span.end;
+        let initialiser = self.parse_expression()?;
+        let end = initialiser.span.end;
 
         Ok(Located::new(
             SimpleStatement::Let {
                 name,
                 type_annotation,
-                initializer,
+                initialiser,
             },
             (start..end).into(),
         ))

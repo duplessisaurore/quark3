@@ -193,7 +193,7 @@ pub enum Statement {
         condition: Located<Expression>,
     },
     For {
-        initializer: Option<Located<SimpleStatement>>,
+        initialiser: Option<Located<SimpleStatement>>,
         condition: Located<Expression>,
         step: Box<Option<Located<SimpleStatement>>>,
         body: Vec<Located<Statement>>,
@@ -223,7 +223,7 @@ pub enum SimpleStatement {
     Let {
         name: String,
         type_annotation: Option<TypeName>,
-        initializer: Located<Expression>,
+        initialiser: Located<Expression>,
     },
     Assignment {
         target: Located<Expression>,

@@ -537,11 +537,11 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 self.lower_dowhile_statement(body, condition, context)?
             }
             Statement::For {
-                initializer,
+                initialiser,
                 condition,
                 step,
                 body,
-            } => self.lower_for_statement(initializer, condition, step, body, context)?,
+            } => self.lower_for_statement(initialiser, condition, step, body, context)?,
             Statement::ForEach {
                 binding,
                 array,
@@ -654,14 +654,14 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     /// Lowers a for statement in the current function context,
     fn lower_for_statement(
         &self,
-        initializer: &Option<Located<SimpleStatement>>,
+        initialiser: &Option<Located<SimpleStatement>>,
         condition: &Located<Expression>,
         step: &Box<Option<Located<SimpleStatement>>>,
         body: &Vec<Located<Statement>>,
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
         // initialiser
-        let initializer = initializer
+        let initialiser = initialiser
             .as_ref()
             .map(|simple_statement| {
                 self.lower_simple_statement(&simple_statement.value, simple_statement.span, context)
@@ -689,7 +689,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
         Ok(format!(
             "!std::for ( {} ; {} ; {} ) {}",
-            block(&initializer),
+            block(&initialiser),
             block(&condition.code),
             block(&step),
             block(&body)
@@ -777,8 +777,8 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             SimpleStatement::Let {
                 name,
                 type_annotation,
-                initializer,
-            } => self.lower_let_statement(name, type_annotation, initializer, span, context)?,
+                initialiser,
+            } => self.lower_let_statement(name, type_annotation, initialiser, span, context)?,
             SimpleStatement::Assignment {
                 target,
                 operator,
@@ -981,30 +981,30 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         &self,
         name: &str,
         type_annotation: &Option<TypeName>,
-        initializer: &Located<Expression>,
+        initialiser: &Located<Expression>,
         span: SourceSpan,
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
         // The initialiser should return a value (which matches the annotation if req)
-        let initializer = match type_annotation {
+        let initialiser = match type_annotation {
             Some(decl_type) => self.expect_lowered_expression_type(
-                initializer,
+                initialiser,
                 decl_type,
                 context,
                 TypeMismatchSource::LetLocalInitialiser,
             )?,
             None => self.expect_lowered_expression_value(
-                initializer,
+                initialiser,
                 context,
                 TypeMismatchSource::LetLocalInitialiser,
             )?,
         };
 
         // The local type is from the initialiser
-        let local_type = initializer.value_type.canonicalise(&self.module.namespace);
+        let local_type = initialiser.value_type.canonicalise(&self.module.namespace);
 
         self.declare_local(name, local_type, span, context)?;
-        Ok(format!("!std::let {name} = {}", block(&initializer.code)))
+        Ok(format!("!std::let {name} = {}", block(&initialiser.code)))
     }
 
     /// Lowers an if statement in the current function context,
