@@ -431,8 +431,6 @@ impl<'src> Lexer<'src> {
                 }
                 _ => {}
             }
-
-            self.skip_whitespace_comments();
         }
 
         self.chars = restore_point;
