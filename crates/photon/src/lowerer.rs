@@ -1604,8 +1604,20 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         context: &FunctionContext,
         source: TypeMismatchSource,
     ) -> PhotonResult<LoweredExpression> {
-        let lowered = self.lower_expression(expression, context)?;
-        lowered.expect_type(expression.span, expected_type, source)?;
+        let expected_type = expected_type.canonicalise(&self.module.namespace);
+
+        // If the expression is an array literal, it can use the type from `expected_type`
+        // to specify itself better, rather than being an Array<Any>
+        let lowered = match &expression.value {
+            Expression::ArrayLiteral(elements) => self.lower_array_lit_expr(
+                elements,
+                context,
+                expected_type.array_element_type(),
+            )?,
+            _ => self.lower_expression(expression, context)?,
+        };
+
+        lowered.expect_type(expression.span, &expected_type, source)?;
         Ok(lowered)
     }
 
@@ -1751,7 +1763,9 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 LoweredExpression::value(format!("!std::bool {value}"), TypeName::Bool)
             }
             Expression::Name(name) => self.lower_name_expr(name, span, context)?,
-            Expression::ArrayLiteral(elements) => self.lower_array_lit_expr(elements, context)?,
+            Expression::ArrayLiteral(elements) => {
+                self.lower_array_lit_expr(elements, context, None)?
+            }
             Expression::Call {
                 callee,
                 type_arguments,
@@ -1999,28 +2013,43 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         &self,
         elements: &Vec<Located<Expression>>,
         context: &FunctionContext,
+        expected_element_type: Option<&TypeName>,
     ) -> PhotonResult<LoweredExpression> {
-        // lower each of the array literal values
-        let values = self.lower_arguments(
-            elements,
-            context,
-            TypeMismatchSource::ArrayLiteralExpression,
-        )?;
+        // Propagate a known element type into nested literals of this literal if
+        // we have a known type, as it should match.
+        let values = if let Some(expected) = expected_element_type {
+            elements
+                .iter()
+                .map(|element| {
+                    let value = self.expect_lowered_expression_type(
+                        element,
+                        expected,
+                        context,
+                        TypeMismatchSource::ArrayLiteralExpression,
+                    )?;
+                    value.expect_value(element.span, TypeMismatchSource::ArrayLiteralExpression)?;
+                    Ok(value)
+                })
+                .collect::<PhotonResult<Vec<_>>>()?
+        } else {
+            self.lower_arguments(elements, context, TypeMismatchSource::ArrayLiteralExpression)?
+        };
 
         // get the type of all the elements for the overall type of the array
         // (ALL if non heterogenous)
-        let element_type = match values.first() {
-            None => TypeName::Any,
+        let element_type = match (expected_element_type, values.first()) {
+            (Some(expected), _) => expected.clone(),
+            (None, None) => TypeName::Any,
 
             // All types must be the same
-            Some(first)
+            (None, Some(first))
                 if values
                     .iter()
                     .all(|value| value.value_type == first.value_type) =>
             {
                 first.value_type.clone()
             }
-            Some(_) => TypeName::Any,
+            (None, Some(_)) => TypeName::Any,
         };
 
         Ok(LoweredExpression::value(
