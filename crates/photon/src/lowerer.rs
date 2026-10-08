@@ -14,7 +14,7 @@ use crate::{
     ast::{
         AssignmentOperator, BinaryOperator, Expression, FunctionDeclaration, Located, MethodName,
         Module, ObjectDeclaration, Parameter, QualifiedName, SimpleStatement, SourceSpan,
-        Statement, StepOperator, TopLevelItem, TypeName, UnaryOperator,
+        Statement, StepOperator, TopLevelItem, TypeName, TypeSubstitutionMap, UnaryOperator,
     },
     errors::{PhotonErrorKind, PhotonResult, TypeMismatchSource},
 };
@@ -107,6 +107,9 @@ pub struct SourceMap {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSignature {
     pub name: QualifiedName,
+
+    // Type parameters and normal parameters
+    pub type_parameters: Vec<String>,
     pub parameters: Vec<TypeName>,
     pub return_type: TypeName,
 }
@@ -115,6 +118,7 @@ pub struct FunctionSignature {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectSignature {
     pub name: QualifiedName,
+    pub type_parameters: Vec<String>,
     pub fields: Vec<(String, TypeName)>,
 }
 
@@ -163,18 +167,7 @@ impl LoweredExpression {
         expected: &TypeName,
         source: TypeMismatchSource,
     ) -> PhotonResult<()> {
-        if !type_accepts(expected, &self.value_type) {
-            return Err(PhotonErrorKind::error(
-                PhotonErrorKind::TypeMismatchSource {
-                    expected: expected.clone(),
-                    found: self.value_type.clone(),
-                    source,
-                },
-                span,
-            ));
-        }
-
-        Ok(())
+        expect_type_accepts(expected, &self.value_type, source, span)
     }
 
     /// Validates that this lowered expression has some value,
@@ -239,6 +232,253 @@ impl ObjectSignature {
         self.fields
             .iter()
             .find_map(|(name, field_type)| (name == field_name).then_some(field_type))
+    }
+
+    /// Returns a subsitution map which represents all of the substitutions done
+    /// to create this instance of this applied object for this object signature type.
+    fn substitution_for_instance(
+        &self,
+        instance_type: &TypeName,
+        span: SourceSpan,
+    ) -> PhotonResult<TypeSubstitutionMap> {
+        // If there are no type parameters to this object signature then we have an empty map
+        if self.type_parameters.is_empty() {
+            if instance_type.object_name() == Some(&self.name) {
+                return Ok(TypeSubstitutionMap::new());
+            }
+        }
+
+        // We have type parameters so this instance must be an Applied {}
+        if let TypeName::Applied {
+            constructor,
+            arguments,
+        } = instance_type
+        {
+            // Number of instance parameters must the number of expected
+            // type parameters for this object type/sig
+            if constructor.object_name() == Some(&self.name)
+                && arguments.len() == self.type_parameters.len()
+            {
+                return Ok(self
+                    .type_parameters
+                    .iter()
+                    .cloned()
+                    .zip(arguments.iter().cloned())
+                    .collect());
+            }
+        }
+
+        Err(PhotonErrorKind::error(
+            PhotonErrorKind::InvalidGenericInstance {
+                instance_type: instance_type.clone(),
+                signature: self.name.clone(),
+            },
+            span,
+        ))
+    }
+
+    /// Returns the type of a field on this instance based on
+    /// the name of the field.
+    ///
+    /// # Errors
+    ///
+    /// The instance must be a valid generic instance of this object.
+    fn field_type_for_instance(
+        &self,
+        instance_type: &TypeName,
+        field_name: &str,
+        span: SourceSpan,
+    ) -> PhotonResult<TypeName> {
+        // get the subsitution map to resolve string -> type
+        let substitution = self.substitution_for_instance(instance_type, span)?;
+
+        let field_type = self.field_type(field_name).ok_or_else(|| {
+            PhotonErrorKind::error(
+                PhotonErrorKind::UnknownObjectField {
+                    name: self.name.clone(),
+                    field: field_name.to_string(),
+                },
+                span,
+            )
+        })?;
+
+        Ok(field_type.substitute(&substitution))
+    }
+
+    /// Instantiates a concrete instance of this object from the signature
+    /// using the arguments to the object's fields and types.
+    ///
+    /// This validates the actual arguments matches the instantiated types.
+    ///
+    /// (as in the type of the object in the concrete instance).
+    fn instantiate_object_type(
+        &self,
+        explicit_type_arguments: &[TypeName],
+        actual_arguments: &[LoweredExpression],
+        span: SourceSpan,
+    ) -> PhotonResult<TypeName> {
+        // Make sure we have enough arguments to the fields
+        expect_argument_count(self.fields.len(), actual_arguments.len(), span)?;
+
+        // More explicit type args than type params are also not allowed
+        // as it can be difficutl to understand why things arent working
+        if explicit_type_arguments.len() > self.type_parameters.len() {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::TooManyExplicitTypeParams { name: self.name.clone(), max: self.type_parameters.len(), found: explicit_type_arguments.len() },
+                span,
+            ));
+        }
+
+        // We build a subsitution map from `explicit_type_params` now
+        let mut substitution = TypeSubstitutionMap::new();
+        for (parameter, argument) in self.type_parameters.iter().zip(explicit_type_arguments) {
+            substitution.insert(parameter.clone(), argument.clone());
+        }
+
+        // Infer any remaining type parameters from the actual arguments now, as explicit types
+        // is non-inferred
+        //
+        // e.g Queue::<blah>(meow) explicit blah, and Queue(meow) infer from meow
+        for ((field, expected), actual) in self.fields.iter().zip(actual_arguments) {
+            infer_type_substitution_map(
+                expected,
+                &actual.value_type,
+                &mut substitution,
+                span,
+                TypeMismatchSource::ObjectTypeInferrence {
+                    field: field.to_string(),
+                },
+            )?;
+        }
+
+        // Ensure all type parameters could actually be inferred based on explicit/inferred args
+        for parameter in &self.type_parameters {
+            if !substitution.contains_key(parameter) {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::UnknownObjectTypeParam {
+                        parameter: parameter.to_string(),
+                        object_type: self.name.clone(),
+                    },
+                    span,
+                ));
+            }
+        }
+
+        // Substitute all the fields of the object into concrete types now
+        let fields = self
+            .fields
+            .iter()
+            .map(|(name, field_type)| (name.clone(), field_type.substitute(&substitution)))
+            .collect::<Vec<_>>();
+
+        // Ensure arguments to the fields of the object actually match their concrete types
+        for ((field_name, expected), actual) in fields.iter().zip(actual_arguments) {
+            expect_type_accepts(
+                expected,
+                &actual.value_type,
+                TypeMismatchSource::ObjectConstructorField {
+                    name: self.name.clone(),
+                    field: field_name.clone(),
+                },
+                span,
+            )?;
+        }
+
+        // If there were no actual type parameters, then this is just a bare Object
+        let instance_type = if self.type_parameters.is_empty() {
+            TypeName::Object(self.name.clone())
+        } else {
+            // Otherwise make the actual applied type with these type parameters substituted
+            let arguments = self
+                .type_parameters
+                .iter()
+                .map(|parameter| substitution[parameter].clone())
+                .collect();
+
+            TypeName::Object(self.name.clone()).applied(arguments)
+        };
+
+        Ok(instance_type)
+    }
+}
+
+impl FunctionSignature {
+    /// Checks the types supplied to one function/method call and returns the
+    /// concrete return type for that call.
+    ///
+    /// This essentially resolves all the type params, args and return type with that in mind.
+    fn check_call_and_resolve_return_type(
+        &self,
+        explicit_type_arguments: &[TypeName],
+        provided_types: &[TypeName],
+        span: SourceSpan,
+    ) -> PhotonResult<TypeName> {
+        // Ensure we have enough concrete parameters for their actual types
+        expect_argument_count(self.parameters.len(), provided_types.len(), span)?;
+
+        // More explicit type args than type params are also not allowed
+        // as it can be difficutl to understand why things arent working
+        if explicit_type_arguments.len() > self.type_parameters.len() {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::TooManyExplicitTypeParams { name: self.name.clone(), max: self.type_parameters.len(), found: explicit_type_arguments.len() },
+                span,
+            ));
+        }
+
+        // We build a subsitution map from `explicit_type_params` now
+        let mut substitution = TypeSubstitutionMap::new();
+        for (parameter, argument) in self.type_parameters.iter().zip(explicit_type_arguments) {
+            substitution.insert(parameter.clone(), argument.clone());
+        }
+
+        // Infer any remaining type parameters from the actual arguments now, as explicit types
+        // is non-inferred
+        //
+        // e.g func<T>(blah: T) and call func(int) should infer T = int
+        for (argn, (expected, actual)) in self.parameters.iter().zip(provided_types).enumerate() {
+            infer_type_substitution_map(
+                expected,
+                actual,
+                &mut substitution,
+                span,
+                TypeMismatchSource::FunctionTypeInferrence { argn },
+            )?;
+        }
+
+        // Ensure all type parameters could actually be inferred based on explicit/inferred args
+        for parameter in &self.type_parameters {
+            if !substitution.contains_key(parameter) {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::UnknownFunctionTypeParam {
+                        parameter: parameter.to_string(),
+                        function: self.name.clone(),
+                    },
+                    span,
+                ));
+            }
+        }
+
+        // Substitute all the params of the function into concrete types now
+        let params = self
+            .parameters
+            .iter()
+            .map(|param_type| param_type.substitute(&substitution))
+            .collect::<Vec<_>>();
+
+        // Ensure arguments to the parameters of the function actually match their concrete types
+        for (argn, (expected, actual)) in params.iter().zip(provided_types).enumerate() {
+            expect_type_accepts(
+                expected,
+                actual,
+                TypeMismatchSource::FunctionCallArgument {
+                    name: self.name.clone(),
+                    argn,
+                },
+                span,
+            )?;
+        }
+
+        Ok(self.return_type.substitute(&substitution))
     }
 }
 
@@ -325,6 +565,7 @@ impl SymbolTable {
         // This is the "signature" of the function which can be referred to elsewhere by its name
         let signature = FunctionSignature {
             name: name.clone(),
+            type_parameters: function.type_parameters.clone(),
             parameters: function
                 .parameters
                 .iter()
@@ -372,6 +613,7 @@ impl SymbolTable {
         // This is the "signature" of the object which can be referred to elsewhere by its name
         let signature = ObjectSignature {
             name: name.clone(),
+            type_parameters: object.type_parameters.clone(),
             fields: object
                 .fields
                 .iter()
@@ -638,9 +880,19 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
         // type of the local binding
         let binding_type = binding.declared_type.canonicalise(&self.module.namespace);
-        self.declare_local(&binding.name, binding_type, span, context)?;
 
-        // local binding is declared in this context
+        // ensure binding type matches array type if it has some
+        if let Some(element_type) = array.value_type.array_element_type() {
+            expect_type_accepts(
+                element_type,
+                &binding_type,
+                TypeMismatchSource::ForEachBinding,
+                span,
+            )?;
+        }
+
+        // local binding is declared in this context for the body
+        self.declare_local(&binding.name, binding_type, span, context)?;
         let body = self.lower_statement_block(body, context)?;
 
         Ok(format!(
@@ -815,6 +1067,9 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             Expression::Name(name) if name.is_unqualified() => {
                 // In the function context locals, assign to local.
                 if let Some(local_type) = context.locals.get(name.last()) {
+                    // validate assignment matches existing type
+                    value.expect_type(span, local_type, TypeMismatchSource::AssignmentRHS)?;
+
                     return assignment_macro(
                         &value.code,
                         &name.last().to_string(),
@@ -835,6 +1090,8 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                         span,
                     )
                 })?;
+
+                value.expect_type(span, global_type, TypeMismatchSource::AssignmentRHS)?;
 
                 return assignment_macro(
                     &value.code,
@@ -895,13 +1152,17 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     )
                 })?;
 
-                // Ensure this object actually has this field
-                expect_object_field(object, field, target.span)?;
+                // Ensure this object actually has this field and get its type
+                let field_type =
+                    object.field_type_for_instance(&receiver.value_type, field, span)?;
+
+                // ensure value matches field type
+                value.expect_type(span, &field_type, TypeMismatchSource::AssignmentRHS)?;
 
                 return assignment_macro(
                     &value.code,
                     &receiver.code,
-                    &receiver.value_type,
+                    &field_type,
                     AssignmentTarget::Object {
                         object_name: object.name.clone(),
                         field_name: field.clone(),
@@ -920,10 +1181,39 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     TypeMismatchSource::ArrayIndexAssignmentReciever,
                 )?;
 
+                let element_type = array.value_type.array_element_type();
+
+                // If the array has a known element type, normal assignment
+                // must match that type.
+                if let Some(element_type) = element_type {
+                    value.expect_type(span, element_type, TypeMismatchSource::AssignmentRHS)?;
+                }
+
+                // Compound assignment requires we know the underlying array type,
+                // otherwise we can't really trust it
+                if operator != AssignmentOperator::Assign && element_type.is_none() {
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::CompoundAssignmentOperatorTypeMismatch {
+                            type_name: TypeName::Array,
+                            operator,
+                        },
+                        span,
+                    ));
+                }
+
+                // Get the type of the element for compound assignment cases,
+                // which should be what we are using for the assignment macro.
+                //
+                // if there is no element type (such as in assignment), default
+                // to value type because we overwrite so it doesn't matter to much
+                let assignment_type = element_type
+                    .cloned()
+                    .unwrap_or_else(|| value.value_type.clone());
+
                 return assignment_macro(
                     &value.code,
                     &array.code,
-                    &value.value_type,
+                    &assignment_type,
                     AssignmentTarget::Array {
                         array_index: index.code,
                     },
@@ -1104,7 +1394,11 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         let span = expression.span;
 
         match &expression.value {
-            Expression::Call { callee, arguments } => {
+            Expression::Call {
+                callee,
+                type_arguments,
+                arguments,
+            } => {
                 let Expression::Name(function_name) = &callee.value else {
                     // we don't handle name producing expressions such as
                     // (function_name)(args), for simplicity. as this would be pretty annoying
@@ -1136,12 +1430,6 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     )
                 })?;
 
-                // Tail-calling will bypass our normalisation of void/non-void with drops,
-                // so make sure the types agree (e.g we don't drop a non-void thing).
-                if !tail_return_shape_matches(expected_return_type, &signature.return_type) {
-                    return Ok(None);
-                }
-
                 // ensure argument count matches else error
                 expect_argument_count(
                     signature.parameters.len(),
@@ -1156,8 +1444,30 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     TypeMismatchSource::TailCallArguments,
                 )?;
 
-                // validate all argument types
-                signature.validate_arguments(span, &arguments)?;
+                // resolve type arguments
+                let explicit_type_arguments = type_arguments
+                    .iter()
+                    .map(|explicit_type| explicit_type.canonicalise(&self.module.namespace))
+                    .collect::<Vec<_>>();
+
+                // types of arguments
+                let actual_types = arguments
+                    .iter()
+                    .map(|argument| argument.value_type.clone())
+                    .collect::<Vec<_>>();
+
+                // validate all argument types/explicit types against signature and get return type
+                let resolved_return_type = signature.check_call_and_resolve_return_type(
+                    &explicit_type_arguments,
+                    &actual_types,
+                    span,
+                )?;
+
+                // Tail-calling will bypass our normalisation of void/non-void with drops,
+                // so make sure the types agree (e.g we don't drop a non-void thing).
+                if !tail_call_return_type_matches(expected_return_type, &resolved_return_type) {
+                    return Ok(None);
+                }
 
                 Ok(Some(format!(
                     "!std::tailcall {resolved_name} ( {} )",
@@ -1168,6 +1478,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             Expression::MethodCall {
                 receiver,
                 method,
+                type_arguments,
                 arguments,
             } => {
                 // lower the reciever down into its actual producing code
@@ -1180,9 +1491,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 // Inferred Array methods are std.b3 array operations
                 // these cannot be tail called as they are special macros intead
                 // and i dont feel like changing it grrrrr
-                if receiver.value_type == TypeName::Array
-                    && matches!(method, MethodName::Inferred(_))
-                {
+                if receiver.value_type.is_array() && matches!(method, MethodName::Inferred(_)) {
                     return Ok(None);
                 }
 
@@ -1195,17 +1504,11 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     PhotonErrorKind::error(
                         PhotonErrorKind::UnknownMethod {
                             name: method_name.clone(),
-                            method_type: receiver.value_type,
+                            method_type: receiver.value_type.clone(),
                         },
                         expression.span,
                     )
                 })?;
-
-                // Tail-calling will bypass our normalisation of void/non-void with drops,
-                // so make sure the types agree (e.g we don't drop a non-void thing).
-                if !tail_return_shape_matches(expected_return_type, &signature.return_type) {
-                    return Ok(None);
-                }
 
                 // The receiver is the first function argument, but it does not
                 // appear in the surface argument list.
@@ -1214,15 +1517,36 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 // ensure the surface arg count matches the arg counts
                 expect_argument_count(expected_argument_count, arguments.len(), expression.span)?;
 
-                // lower and tailmethod
+                // lower arguments
                 let arguments = self.lower_arguments(
                     arguments,
                     context,
                     TypeMismatchSource::TailCallMethodArguments,
                 )?;
 
-                // validate all argument types
-                signature.validate_method_arguments(span, &arguments)?;
+                // resolve type arguments
+                let explicit_type_arguments = type_arguments
+                    .iter()
+                    .map(|explicit_type| explicit_type.canonicalise(&self.module.namespace))
+                    .collect::<Vec<_>>();
+
+                // types of arguments
+                let mut actual_types = Vec::with_capacity(arguments.len() + 1);
+                actual_types.push(receiver.value_type.clone());
+                actual_types.extend(arguments.iter().map(|argument| argument.value_type.clone()));
+
+                // validate all argument types/explicit types against signature and get return type
+                let resolved_return_type = signature.check_call_and_resolve_return_type(
+                    &explicit_type_arguments,
+                    &actual_types,
+                    span,
+                )?;
+
+                // Tail-calling will bypass our normalisation of void/non-void with drops,
+                // so make sure the types agree (e.g we don't drop a non-void thing).
+                if !tail_call_return_type_matches(expected_return_type, &resolved_return_type) {
+                    return Ok(None);
+                }
 
                 Ok(Some(format!(
                     "!std::object_tailmethod {} -> {method_name} ( {} )",
@@ -1428,17 +1752,22 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             }
             Expression::Name(name) => self.lower_name_expr(name, span, context)?,
             Expression::ArrayLiteral(elements) => self.lower_array_lit_expr(elements, context)?,
-            Expression::Call { callee, arguments } => {
-                self.lower_call_expr(callee, arguments, span, context)?
-            }
+            Expression::Call {
+                callee,
+                type_arguments,
+                arguments,
+            } => self.lower_call_expr(callee, type_arguments, arguments, span, context)?,
             Expression::FieldAccess { receiver, field } => {
                 self.lower_field_access(receiver, field, span, context)?
             }
             Expression::MethodCall {
                 receiver,
                 method,
+                type_arguments,
                 arguments,
-            } => self.lower_method_call(receiver, method, arguments, span, context)?,
+            } => {
+                self.lower_method_call(receiver, method, type_arguments, arguments, span, context)?
+            }
             Expression::Index { array, index } => {
                 self.lower_array_index_expr(array, index, context)?
             }
@@ -1557,6 +1886,12 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         let (array, index) =
             self.lower_array_index(array, index, context, TypeMismatchSource::ArrayIndexExpr)?;
 
+        let element_type = array
+            .value_type
+            .array_element_type()
+            .cloned()
+            .unwrap_or(TypeName::Any);
+
         // simple get at index
         Ok(LoweredExpression::value(
             format!(
@@ -1564,7 +1899,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 block(&array.code),
                 block(&index.code)
             ),
-            TypeName::Any,
+            element_type,
         ))
     }
 
@@ -1672,13 +2007,29 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             TypeMismatchSource::ArrayLiteralExpression,
         )?;
 
+        // get the type of all the elements for the overall type of the array
+        // (ALL if non heterogenous)
+        let element_type = match values.first() {
+            None => TypeName::Any,
+
+            // All types must be the same
+            Some(first)
+                if values
+                    .iter()
+                    .all(|value| value.value_type == first.value_type) =>
+            {
+                first.value_type.clone()
+            }
+            Some(_) => TypeName::Any,
+        };
+
         Ok(LoweredExpression::value(
             format!(
                 "!std::array {} ( {} )",
                 values.len(),
                 lowered_exprs_block(&values)
             ),
-            TypeName::Array,
+            TypeName::array_of(element_type),
         ))
     }
 
@@ -1686,6 +2037,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     fn lower_call_expr(
         &self,
         callee: &Located<Expression>,
+        type_arguments: &[TypeName],
         arguments: &[Located<Expression>],
         span: SourceSpan,
         context: &FunctionContext,
@@ -1706,6 +2058,12 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         // Resolve it's name, so we can find out if its a function or object call.
         let resolved_name = callee_name.resolve(&self.module.namespace);
 
+        // Get type arguments for resolving
+        let explicit_type_arguments = type_arguments
+            .iter()
+            .map(|explicit_type| explicit_type.canonicalise(&self.module.namespace))
+            .collect::<Vec<_>>();
+
         // Object constructor
         if let Some(object) = self.symbols.object(&resolved_name) {
             expect_argument_count(object.fields.len(), arguments.len(), span)?;
@@ -1719,21 +2077,9 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 },
             )?;
 
-            // type check all arguments
-            for (index, ele) in arguments.iter().enumerate() {
-                // argument is to specific field at num
-                let (field_name, field_type) = &object.fields[index];
-
-                // validate type matches
-                ele.expect_type(
-                    span,
-                    &field_type,
-                    TypeMismatchSource::ObjectConstructorField {
-                        name: resolved_name.clone(),
-                        field: field_name.clone(),
-                    },
-                )?;
-            }
+            // type check all arguments and get actual real type
+            let constructed_object_type =
+                object.instantiate_object_type(&explicit_type_arguments, &arguments, span)?;
 
             // actual constructor
             return Ok(LoweredExpression::value(
@@ -1741,7 +2087,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     "!std::object_new {resolved_name} ( {} )",
                     lowered_exprs_block(&arguments)
                 ),
-                TypeName::Object(resolved_name),
+                constructed_object_type,
             ));
         }
 
@@ -1767,16 +2113,26 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             },
         )?;
 
-        // validate all argument types
-        signature.validate_arguments(span, &arguments)?;
+        // get types of all the arguments
+        let actual_types = arguments
+            .iter()
+            .map(|argument| argument.value_type.clone())
+            .collect::<Vec<_>>();
 
-        // actual code for the call
+        // check types of arguments and explicit type params and get
+        // our actual return type
+        let resolved_return_type = signature.check_call_and_resolve_return_type(
+            &explicit_type_arguments,
+            &actual_types,
+            span,
+        )?;
+
         let call_code = format!(
             "!std::call {resolved_name} ( {} )",
             lowered_exprs_block(&arguments)
         );
 
-        Ok(signature.return_type.normalise_to_drop(&call_code))
+        Ok(resolved_return_type.normalise_to_drop(&call_code))
     }
 
     /// Lowers a potential intrinsic call in the current context of a function
@@ -1890,6 +2246,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         &self,
         receiver: &Located<Expression>,
         method: &MethodName,
+        type_arguments: &[TypeName],
         arguments: &[Located<Expression>],
         span: SourceSpan,
         context: &FunctionContext,
@@ -1917,7 +2274,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             PhotonErrorKind::error(
                 PhotonErrorKind::UnknownMethod {
                     name: method_name.clone(),
-                    method_type: receiver.value_type,
+                    method_type: receiver.value_type.clone(),
                 },
                 span,
             )
@@ -1938,17 +2295,32 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             },
         )?;
 
-        // validate argument types
-        signature.validate_method_arguments(span, &arguments)?;
+        // get explicit type arguments to this method call
+        let explicit_type_arguments = type_arguments
+            .iter()
+            .map(|explicit_type| explicit_type.canonicalise(&self.module.namespace))
+            .collect::<Vec<_>>();
 
-        // Actual code to call the method
+        // actual types of all the method params
+        let mut actual_types = Vec::with_capacity(arguments.len() + 1);
+        actual_types.push(receiver.value_type.clone());
+        actual_types.extend(arguments.iter().map(|argument| argument.value_type.clone()));
+
+        // check types of arguments and explicit type params and get
+        // our actual return type
+        let resolved_return_type = signature.check_call_and_resolve_return_type(
+            &explicit_type_arguments,
+            &actual_types,
+            span,
+        )?;
+
         let call_code = format!(
             "!std::object_method {} -> {method_name} ( {} )",
             block(&receiver.code),
             lowered_exprs_block(&arguments)
         );
 
-        Ok(signature.return_type.normalise_to_drop(&call_code))
+        Ok(resolved_return_type.normalise_to_drop(&call_code))
     }
 
     /// Lowers a potential array method call in the current context of a function
@@ -1961,7 +2333,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         context: &FunctionContext,
     ) -> PhotonResult<Option<LoweredExpression>> {
         // Reciever type must be an array
-        if receiver.value_type != TypeName::Array {
+        if !receiver.value_type.is_array() {
             return Ok(None);
         }
 
@@ -1969,6 +2341,14 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         let MethodName::Inferred(method_name) = method else {
             return Ok(None);
         };
+
+        // Get the specific element type of the array element, for returning
+        // more known types rather than any
+        let element_type = receiver
+            .value_type
+            .array_element_type()
+            .cloned()
+            .unwrap_or(TypeName::Any);
 
         // match specific macro to inferred call
         let result = match method_name.as_str() {
@@ -1983,14 +2363,14 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 expect_argument_count(0, arguments.len(), span)?;
                 LoweredExpression::value(
                     format!("!std::array_head {}", block(&receiver.code)),
-                    TypeName::Any,
+                    element_type,
                 )
             }
             "tail" => {
                 expect_argument_count(0, arguments.len(), span)?;
                 LoweredExpression::value(
                     format!("!std::array_tail {}", block(&receiver.code)),
-                    TypeName::Array,
+                    receiver.value_type.clone(),
                 )
             }
             "append" => {
@@ -2004,13 +2384,27 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     TypeMismatchSource::ArrayAppendArgument,
                 )?;
 
+                // Get the resulting type out
+                let Some(result_type) =
+                    array_append_result_type(&receiver.value_type, &other.value_type)
+                else {
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::BinaryOpMismatch {
+                            operator: BinaryOperator::ArrayAppend,
+                            lhs: receiver.value_type.clone(),
+                            rhs: other.value_type,
+                        },
+                        span,
+                    ));
+                };
+
                 LoweredExpression::value(
                     format!(
                         "!std::array_append {} {}",
                         block(&receiver.code),
                         block(&other.code)
                     ),
-                    TypeName::Array,
+                    result_type,
                 )
             }
             "prepend" => {
@@ -2021,13 +2415,20 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     TypeMismatchSource::ArrayPrependArgument,
                 )?;
 
+                expect_type_accepts(
+                    &element_type,
+                    &value.value_type,
+                    TypeMismatchSource::ArrayPrependArgument,
+                    span,
+                )?;
+
                 LoweredExpression::value(
                     format!(
                         "!std::array_prepend {} {}",
                         block(&receiver.code),
                         block(&value.code)
                     ),
-                    TypeName::Array,
+                    receiver.value_type.clone(),
                 )
             }
             _ => return Ok(None),
@@ -2073,7 +2474,11 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         })?;
 
         // Ensure this object field actually exists
-        let field_type = expect_object_field(object, field, span)?;
+        let field_type = object.field_type_for_instance(
+            &receiver.value_type,
+            field,
+            span,
+        )?;
 
         Ok(LoweredExpression::value(
             format!(
@@ -2082,7 +2487,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 object.name,
                 field
             ),
-            field_type.clone(),
+            field_type,
         ))
     }
 
@@ -2103,15 +2508,18 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
         // The array append operator, applies to array types
         if operator == BinaryOperator::ArrayAppend {
-            if left.value_type != TypeName::Array || right.value_type != TypeName::Array {
+            // Get the resulting type out
+            let Some(result_type) = array_append_result_type(&left.value_type, &right.value_type)
+            else {
                 return Err(PhotonErrorKind::error(
-                    PhotonErrorKind::ArrayAppendToNonBothArrayOperands {
-                        lhs: left.value_type,
-                        rhs: right.value_type,
+                    PhotonErrorKind::BinaryOpMismatch {
+                        operator: BinaryOperator::ArrayAppend,
+                        lhs: left.value_type.clone(),
+                        rhs: right.value_type.clone(),
                     },
                     span,
                 ));
-            }
+            };
 
             return Ok(LoweredExpression::value(
                 format!(
@@ -2119,7 +2527,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     block(&left.code),
                     block(&right.code)
                 ),
-                TypeName::Array,
+                result_type,
             ));
         }
 
@@ -2265,11 +2673,15 @@ fn resolve_intrinsic(name: &QualifiedName) -> Option<Intrinsic> {
 
 /// Returns whether or not the shape (that is whether or not
 /// we actually expect a value) matches from this function.
-fn tail_return_shape_matches(caller_return_type: &TypeName, callee_return_type: &TypeName) -> bool {
-    let caller_is_void = caller_return_type == &TypeName::Void;
-    let callee_is_void = callee_return_type == &TypeName::Void;
-
-    caller_is_void == callee_is_void
+///
+/// The shape that matches is if expect & actual is Void or
+/// if actual isnt void and expected accepts actual
+fn tail_call_return_type_matches(expected: &TypeName, actual: &TypeName) -> bool {
+    if expected == &TypeName::Void {
+        actual == &TypeName::Void
+    } else {
+        actual != &TypeName::Void && type_accepts(expected, actual)
+    }
 }
 
 /// Ensures that the expected number of arguments
@@ -2285,54 +2697,6 @@ fn expect_argument_count(expected: usize, actual: usize, span: SourceSpan) -> Ph
             },
             span,
         ))
-    }
-}
-
-impl FunctionSignature {
-    /// Validates all these arguments match the function signature, otherwise erroring
-    pub fn validate_arguments(
-        &self,
-        span: SourceSpan,
-        arguments: &Vec<LoweredExpression>,
-    ) -> PhotonResult<()> {
-        // type check all arguments
-        for (index, ele) in arguments.iter().enumerate() {
-            // validate type matches
-            ele.expect_type(
-                span,
-                &self.parameters[index],
-                TypeMismatchSource::FunctionCallArgument {
-                    name: self.name.clone(),
-                    argn: index,
-                },
-            )?;
-        }
-
-        Ok(())
-    }
-
-    /// Validates all these arguments match the method's signature otherwise erroring
-    ///
-    /// This essentially just skips the first argument.
-    pub fn validate_method_arguments(
-        &self,
-        span: SourceSpan,
-        arguments: &Vec<LoweredExpression>,
-    ) -> PhotonResult<()> {
-        // type check all arguments
-        for (index, ele) in arguments.iter().enumerate() {
-            // validate type matches
-            ele.expect_type(
-                span,
-                &self.parameters[index + 1],
-                TypeMismatchSource::FunctionCallArgument {
-                    name: self.name.clone(),
-                    argn: index + 1,
-                },
-            )?;
-        }
-
-        Ok(())
     }
 }
 
@@ -2394,7 +2758,7 @@ fn assignment_macro(
                 field_name,
             },
         ) => format!(
-            "!std::object_int_set {} -> {}.{}",
+            "object_int_set {} -> {}.{}",
             block(lhs),
             object_name,
             field_name,
@@ -2406,7 +2770,7 @@ fn assignment_macro(
                 field_name,
             },
         ) => format!(
-            "!std::object_uint_set {} -> {}.{}",
+            "object_uint_set {} -> {}.{}",
             block(lhs),
             object_name,
             field_name,
@@ -2418,26 +2782,20 @@ fn assignment_macro(
                 field_name,
             },
         ) => format!(
-            "!std::object_float_set {} -> {}.{}",
+            "object_float_set {} -> {}.{}",
             block(lhs),
             object_name,
             field_name,
         ),
-        (TypeName::Int, AssignmentTarget::Array { array_index }) => format!(
-            "!std::!std::array_int_set {} [ {} ]",
-            block(lhs),
-            array_index,
-        ),
-        (TypeName::UInt, AssignmentTarget::Array { array_index }) => format!(
-            "!std::!std::array_uint_set {} [ {} ]",
-            block(lhs),
-            array_index,
-        ),
-        (TypeName::Float, AssignmentTarget::Array { array_index }) => format!(
-            "!std::!std::array_float_set {} [ {} ]",
-            block(lhs),
-            array_index,
-        ),
+        (TypeName::Int, AssignmentTarget::Array { array_index }) => {
+            format!("array_int_set {} [ {} ]", block(lhs), array_index,)
+        }
+        (TypeName::UInt, AssignmentTarget::Array { array_index }) => {
+            format!("array_uint_set {} [ {} ]", block(lhs), array_index,)
+        }
+        (TypeName::Float, AssignmentTarget::Array { array_index }) => {
+            format!("array_float_set {} [ {} ]", block(lhs), array_index,)
+        }
 
         // no valid ops for this type
         (_, _) => {
@@ -2474,24 +2832,6 @@ fn assignment_macro(
     Ok(format!("!std::{macro_name} {operator} {}", block(code)))
 }
 
-/// Ensures an object, with the signature `object` contains
-/// a field with the name `field`, otherwise erroring
-fn expect_object_field<'a>(
-    object: &'a ObjectSignature,
-    field: &str,
-    span: SourceSpan,
-) -> PhotonResult<&'a TypeName> {
-    object.field_type(field).ok_or_else(|| {
-        PhotonErrorKind::error(
-            PhotonErrorKind::UnknownObjectField {
-                name: object.name.clone(),
-                field: field.to_string(),
-            },
-            span,
-        )
-    })
-}
-
 impl Display for Intrinsic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let intrinsic_name = match self {
@@ -2508,11 +2848,192 @@ impl Display for Intrinsic {
     }
 }
 
+/// Infer types into a type substitution map based on the supplied type for some declared type we
+/// are substituting into
+///
+/// Essentially based on the `declared_type` and the `supplied_type` of that
+/// declared type, we either see if it's in the map, and verify the type is legal (otherwise erroring)
+///
+/// or if its not currently in the map we set it as the first of that kind of parameter in the map.
+fn infer_type_substitution_map(
+    declared_type: &TypeName,
+    supplied_type: &TypeName,
+    map: &mut TypeSubstitutionMap,
+    span: SourceSpan,
+    source: TypeMismatchSource,
+) -> PhotonResult<()> {
+    match declared_type {
+        // A simple generic parameter, say Queue<T> where declared_type is the T and
+        // supplied_type is provided in the position of T
+        TypeName::GenericParameter(parameter) => {
+            // See if the type exists already in the map (else we insert).
+            if let Some(previous_type) = map.get(parameter) {
+                if type_accepts(previous_type, supplied_type)
+                    && type_accepts(supplied_type, previous_type)
+                {
+                    // Exists in map, type accepts
+                    Ok(())
+                } else {
+                    // Type mismatch!
+                    Err(PhotonErrorKind::error(
+                        PhotonErrorKind::InvalidSuppliedTypeForGenericParam {
+                            expected: previous_type.clone(),
+                            found: supplied_type.clone(),
+                            generic_parameter: parameter.clone(),
+                        },
+                        span,
+                    ))
+                }
+            } else {
+                // Not in the map yet, insert for this parameter as the first time.
+                map.insert(parameter.clone(), supplied_type.clone());
+                Ok(())
+            }
+        }
+
+        // Applied so for e.x Queue<T>,
+        // if putting in a Queue<Int> should fill T as Int
+        TypeName::Applied {
+            constructor: declared_constructor,
+            arguments: declared_arguments,
+        } => {
+            // If we are supplying Array for some Array<T>, this is valid
+            // as this is an "any" array
+            if declared_constructor.as_ref() == &TypeName::Array
+                && supplied_type == &TypeName::Array
+            {
+                return Ok(());
+            }
+
+            // Extract the inner arguments to match against declared_type
+            // in supplied_type.
+            let TypeName::Applied {
+                constructor: supplied_constructor,
+                arguments: supplied_arguments,
+            } = supplied_type
+            else {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::NonAppliedSuppliedTypeForDeclaredSuppliedType {
+                        supplied: supplied_type.clone(),
+                    },
+                    span,
+                ));
+            };
+
+            // The total number of arguments must match, doesn't make much
+            // sense to match C<T, A> with C<Int, Int, Int>
+            if declared_arguments.len() != supplied_arguments.len() {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::AppliedTypeInferenceArgNMismatch {
+                        declared_argn: declared_arguments.len(),
+                        supplied_argn: supplied_arguments.len(),
+                    },
+                    span,
+                ));
+            }
+
+            // Match against generic constructor..
+            infer_type_substitution_map(
+                declared_constructor,
+                supplied_constructor,
+                map,
+                span,
+                source.clone(),
+            )?;
+
+            // Now infer against the sub things, so for C<T, A> and C<B, A> we infer T = B and A = A
+            for (declared_argument, supplied_argument) in
+                declared_arguments.iter().zip(supplied_arguments)
+            {
+                infer_type_substitution_map(
+                    declared_argument,
+                    supplied_argument,
+                    map,
+                    span,
+                    source.clone(),
+                )?;
+            }
+
+            Ok(())
+        }
+
+        // We are allowed to supply any non-void type to some Any
+        TypeName::Any if supplied_type != &TypeName::Void => Ok(()),
+
+        // And concrete types must accept eachother
+        concrete if type_accepts(concrete, supplied_type) => Ok(()),
+
+        // Otherwise, type mismatch!
+        _ => Err(PhotonErrorKind::error(
+            PhotonErrorKind::TypeMismatchSource {
+                expected: declared_type.clone(),
+                found: supplied_type.clone(),
+                source,
+            },
+            span,
+        )),
+    }
+}
+
 /// Whether or not this type expects another type (that
 /// is sthat passing this type to another type is allowed)
 fn type_accepts(expected: &TypeName, actual: &TypeName) -> bool {
-    match expected {
-        TypeName::Any => actual != &TypeName::Void,
+    match (expected, actual) {
+        (TypeName::Any, actual) => actual != &TypeName::Void,
+
+        // Arrays accept other arrays if there is no parameterised types
+        // else has to be exact
+        (TypeName::Array, actual) => actual.is_array(),
+
+        // Objects accept eachother if its just a bare object name vs actual concrete type
+        (TypeName::Object(expected_name), actual) => actual.object_name() == Some(expected_name),
+
         _ => expected == actual,
     }
+}
+
+/// Excepts that the expected type accepts the actual type, otherwise
+/// errors with a TypeMismatch
+fn expect_type_accepts(
+    expected: &TypeName,
+    actual: &TypeName,
+    source: TypeMismatchSource,
+    span: SourceSpan,
+) -> PhotonResult<()> {
+    if !type_accepts(expected, actual) {
+        return Err(PhotonErrorKind::error(
+            PhotonErrorKind::TypeMismatchSource {
+                expected: expected.clone(),
+                found: actual.clone(),
+                source: source,
+            },
+            span,
+        ));
+    }
+
+    Ok(())
+}
+
+/// Resulting type of the array append operation if these
+/// are the two array types.
+///
+/// Returns None if the resultant type is not an Array
+/// otherwise Some() of the type.
+fn array_append_result_type(left: &TypeName, right: &TypeName) -> Option<TypeName> {
+    if !left.is_array() || !right.is_array() {
+        return None;
+    }
+
+    // A bare Array means the element type cannot be known (non-homogenous)
+    // so we have to revert to that if either are array
+    if left == &TypeName::Array || right == &TypeName::Array {
+        return Some(TypeName::Array);
+    }
+
+    // And if they arent array, then we need to ensure their types match
+    if left == right {
+        return Some(left.clone());
+    }
+
+    None
 }

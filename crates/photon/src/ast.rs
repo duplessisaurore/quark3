@@ -1,6 +1,6 @@
 //! This is the full ast that the parser will produce
 
-use std::{fmt, ops::Range};
+use std::{collections::HashMap, fmt, ops::Range};
 
 use crate::lowerer::{LoweredExpression, block};
 
@@ -65,24 +65,23 @@ pub enum TypeName {
     Void,
     Any,
     Object(QualifiedName),
+
+    // A generic parameter in the position of a type that is substituted at comptime
+    GenericParameter(String),
+
+    /// The application of some arguments to a type constructor
+    /// to produce an "applied" type such as Queue<Int>
+    Applied {
+        constructor: Box<TypeName>,
+        arguments: Vec<TypeName>,
+    },
 }
 
-impl fmt::Display for TypeName {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Int => write!(formatter, "Int"),
-            Self::UInt => write!(formatter, "UInt"),
-            Self::Float => write!(formatter, "Float"),
-            Self::Bool => write!(formatter, "Bool"),
-            Self::Array => write!(formatter, "Array"),
-            Self::Tag => write!(formatter, "Tag"),
-            Self::Unit => write!(formatter, "Unit"),
-            Self::Void => write!(formatter, "Void"),
-            Self::Any => write!(formatter, "Any"),
-            Self::Object(name) => write!(formatter, "{name}"),
-        }
-    }
-}
+/// Substitution map, this maps all of the generic parameters
+/// in a type to it's concrete type to resolve to by name
+/// 
+/// For ex. Queue<T>, TSMap<T = Int> will subsittute the queue to Queue<Int>
+pub type TypeSubstitutionMap = HashMap<String, TypeName>;
 
 /// One output of the parser phase,
 /// this is a full module which contains a set of top level "declarations/items"
@@ -144,6 +143,7 @@ pub struct GlobalDeclaration {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectDeclaration {
     pub name: String,
+    pub type_parameters: Vec<String>,
     pub fields: Vec<Parameter>,
 }
 
@@ -153,6 +153,7 @@ pub struct ObjectDeclaration {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDeclaration {
     pub name: String,
+    pub type_parameters: Vec<String>,
     pub parameters: Vec<Parameter>,
     pub return_type: TypeName,
     pub body: Vec<Located<Statement>>,
@@ -249,6 +250,7 @@ pub enum Expression {
     ArrayLiteral(Vec<Located<Expression>>),
     Call {
         callee: Box<Located<Expression>>,
+        type_arguments: Vec<TypeName>,
         arguments: Vec<Located<Expression>>,
     },
     FieldAccess {
@@ -258,6 +260,7 @@ pub enum Expression {
     MethodCall {
         receiver: Box<Located<Expression>>,
         method: MethodName,
+        type_arguments: Vec<TypeName>,
         arguments: Vec<Located<Expression>>,
     },
     Index {
@@ -357,8 +360,8 @@ pub enum StepOperator {
 }
 
 impl fmt::Display for UnaryOperator {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
             Self::Negate => "-",
             Self::LogicalNot => "!",
             Self::BitwiseNot => "~",
@@ -367,8 +370,8 @@ impl fmt::Display for UnaryOperator {
 }
 
 impl fmt::Display for BinaryOperator {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
             Self::Multiply => "*",
             Self::Divide => "/",
             Self::Remainder => "%",
@@ -393,8 +396,8 @@ impl fmt::Display for BinaryOperator {
 }
 
 impl fmt::Display for AssignmentOperator {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
             Self::Assign => "=",
             Self::AddAssign => "+=",
             Self::SubtractAssign => "-=",
@@ -411,8 +414,8 @@ impl fmt::Display for AssignmentOperator {
 }
 
 impl fmt::Display for StepOperator {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
             Self::Increment => "++",
             Self::Decrement => "--",
         })
@@ -502,8 +505,40 @@ impl QualifiedName {
 }
 
 impl fmt::Display for QualifiedName {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.segments.join("::"))
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.segments.join("::"))
+    }
+}
+
+
+impl fmt::Display for TypeName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Int => write!(f, "Int"),
+            Self::UInt => write!(f, "UInt"),
+            Self::Float => write!(f, "Float"),
+            Self::Bool => write!(f, "Bool"),
+            Self::Array => write!(f, "Array"),
+            Self::Tag => write!(f, "Tag"),
+            Self::Unit => write!(f, "Unit"),
+            Self::Void => write!(f, "Void"),
+            Self::Any => write!(f, "Any"),
+            Self::GenericParameter(name) => write!(f, "{name}"),
+            Self::Object(name) => write!(f, "{name}"),
+            Self::Applied {
+                constructor,
+                arguments,
+            } => write!(
+                f,
+                "{}<{}>",
+                constructor,
+                arguments
+                    .into_iter()
+                    .map(TypeName::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        }
     }
 }
 
@@ -533,6 +568,56 @@ impl TypeName {
     pub fn object_name(&self) -> Option<&QualifiedName> {
         match self {
             Self::Object(name) => Some(name),
+
+            // the applied constructor can be an object too, etc. Queue<T>
+            Self::Applied { constructor, .. } => {
+                constructor.object_name()
+            }
+
+            _ => None,
+        }
+    }
+
+    /// Constructs an applied type from this type constructor.
+    /// 
+    /// This essentially turns this type into ThisType<arguments...>
+    pub fn applied(self, arguments: Vec<TypeName>) -> Self {
+        Self::Applied {
+            constructor: Box::new(self),
+            arguments,
+        }
+    }
+
+    /// Constructs `Array<element>` where element is some other type.
+    pub fn array_of(element: TypeName) -> Self {
+        Self::Array.applied(vec![element])
+    }
+
+    /// Returns whether this type is an Array (regardless
+    /// of bare or applied or not).
+    pub fn is_array(&self) -> bool {
+        match self {
+            Self::Array => true,
+            Self::Applied {
+                constructor,
+                arguments,
+                
+                // Array<T, T> is not an array...
+            } => constructor.as_ref() == &Self::Array && arguments.len() == 1,
+            _ => false,
+        }
+    }
+
+    /// Returns the element type stored inside this array if it has some element
+    /// type defined, a bare Array is None.
+    pub fn array_element_type(&self) -> Option<&TypeName> {
+        match self {
+            Self::Applied {
+                constructor,
+                arguments,
+            } if constructor.as_ref() == &Self::Array && arguments.len() == 1 => {
+                arguments.first()
+            }
             _ => None,
         }
     }
@@ -540,11 +625,29 @@ impl TypeName {
     /// Canonicalises this type name to the full type name
     /// including any required namespace
     ///
-    /// Only real introduced type names are essentially object,
-    /// so this just resolves object.
+    /// Only real introduced type names are essentially objects,
+    /// and applied types.
     pub fn canonicalise(&self, current_namespace: &QualifiedName) -> TypeName {
         match self {
+            // objects are declared in a certain namespace
             TypeName::Object(name) => TypeName::Object(name.resolve(current_namespace)),
+
+            // need to canonicalise all arguments too
+            TypeName::Applied {
+                constructor,
+                arguments,
+            } => TypeName::Applied {
+                constructor: Box::new(constructor.canonicalise(current_namespace)),
+                arguments: arguments
+                    .iter()
+                    .map(|argument| argument.canonicalise(current_namespace))
+                    .collect(),
+            },
+
+            // This doesn't need to be namespaced because its a param/local rather than
+            // a seperate declaration of some type
+            TypeName::GenericParameter(name) => TypeName::GenericParameter(name.clone()),
+
             primitive => primitive.clone(),
         }
     }
@@ -561,11 +664,71 @@ impl TypeName {
             LoweredExpression::value(code, self.clone())
         }
     }
+
+    /// Returns all of the arguments that are applied to this type if there are any
+    pub fn applied_arguments(&self) -> Option<&[TypeName]> {
+        match self {
+            Self::Applied { arguments, .. } => Some(arguments),
+            _ => None,
+        }
+    }
+
+    /// Uses a type substitution map to map all of the generic parameters
+    /// of this current type in the substitution map to some other type recursively.
+    /// 
+    /// For ex. Queue<T> => Queue<Int>
+    pub fn substitute(
+        &self,
+        substitution: &TypeSubstitutionMap,
+    ) -> TypeName {
+        match self {
+            // We are mapping generic parameters direclty.
+            TypeName::GenericParameter(name) => substitution
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| self.clone()),
+
+            // Queue<T> => need to remap T as arg and the constructor itself if it's a generic T<P>
+            TypeName::Applied {
+                constructor,
+                arguments,
+            } => TypeName::Applied {
+                constructor: Box::new(
+                    constructor.substitute(substitution)
+                ),
+                arguments: arguments
+                    .iter()
+                    .map(|argument| {
+                        argument.substitute(substitution)
+                    })
+                    .collect(),
+            },
+
+            // No substitution needed here.
+            other => other.clone(),
+        }
+    }    
+
+    /// Returns whether this type still contains an un-subsituted/resolved generic parameter.
+    pub fn contains_generic_parameter(&self) -> bool {
+        match self {
+            TypeName::GenericParameter(_) => true,
+            TypeName::Applied {
+                constructor,
+                arguments,
+            } => {
+                constructor.contains_generic_parameter()
+                    || arguments.iter().any(TypeName::contains_generic_parameter)
+            }
+            _ => false,
+        }
+    }
+
 }
 
 impl BinaryOperator {
-    /// Returns whether or not this binary operator can be applied to two Numeric operands 
-    /// 
+    /// Returns whether or not this binary operator can be applied to two Numeric operands
+    ///
     /// This is seperate to floats! (for Int/UInt)
     pub fn is_numeric(&self) -> bool {
         matches!(
@@ -589,7 +752,7 @@ impl BinaryOperator {
         )
     }
 
-    /// Returns whether or not this binary operator can be applied to two Float operands 
+    /// Returns whether or not this binary operator can be applied to two Float operands
     pub fn is_float(&self) -> bool {
         matches!(
             self,

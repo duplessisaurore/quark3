@@ -29,6 +29,13 @@ pub struct Parser<'tokens> {
     /// We do not use Peekable or something similar since
     /// we may want to do backtracking or other things
     cursor: usize,
+
+    /// The type parameters that are currently in scope.
+    ///
+    /// This is used for matching against type names during type resolution,
+    /// as a direct match of a type name like T to a type param in scope
+    /// should be that generic parameter instead of Object(T)
+    type_parameters_in_scope: Vec<String>,
 }
 
 impl<'tokens> Parser<'tokens> {
@@ -39,6 +46,7 @@ impl<'tokens> Parser<'tokens> {
             source_file_name,
             tokens,
             cursor: 0,
+            type_parameters_in_scope: Vec::new(),
         }
     }
 
@@ -97,6 +105,13 @@ impl<'tokens> Parser<'tokens> {
         }
 
         self.peek_token()
+            .map(|token| &token.value == kind)
+            .unwrap_or(false)
+    }
+
+    /// Check if the token `offset` ahead matches `kind`.
+    fn check_nth(&self, offset: usize, kind: &TokenKind) -> bool {
+        self.peek_token_nth(offset)
             .map(|token| &token.value == kind)
             .unwrap_or(false)
     }
@@ -415,13 +430,21 @@ impl<'tokens> Parser<'tokens> {
         // object name
         let name = self.expect_identifier()?;
 
-        // all the parmaeters of the object
-        let fields = self.parse_parameter_list()?;
+        // optional type parameters
+        let type_parameters = self.parse_type_parameter_list()?;
+
+        // all the parmaeters of the object, these can refer to the type parameters
+        let fields =
+            self.with_type_parameters(&type_parameters, |parser| parser.parse_parameter_list())?;
 
         let end = self.previous_span().end;
 
         let item = Located::new(
-            TopLevelItem::Object(ObjectDeclaration { name, fields }),
+            TopLevelItem::Object(ObjectDeclaration {
+                name,
+                type_parameters,
+                fields,
+            }),
             (start..end).into(),
         );
 
@@ -436,33 +459,41 @@ impl<'tokens> Parser<'tokens> {
 
         // function name
         let name = self.expect_identifier()?;
+        // optional type parameters to the function
+        let type_parameters = self.parse_type_parameter_list()?;
 
-        // function params
-        let parameters = self.parse_parameter_list()?;
+        // parameters, return type, signature etc. can refer to type params
+        let (parameters, return_type, signature_end, body) =
+            self.with_type_parameters(&type_parameters, |parser| {
+                // function params
+                let parameters = parser.parse_parameter_list()?;
 
-        // function ret type
-        self.expect(&TokenKind::Arrow)?;
-        let return_type = self.parse_type()?;
+                // function ret type
+                parser.expect(&TokenKind::Arrow)?;
+                let return_type = parser.parse_type()?;
 
-        let signature_end = self.previous_span().end;
+                let signature_end = parser.previous_span().end;
 
-        self.require_newline()?;
+                parser.require_newline()?;
 
-        let mut body = Vec::new();
+                let mut body = Vec::new();
 
-        // body of the function
-        // essentially we parse it as statements without considering directive lines
-        while !self.is_at_end()
-            && !matches!(
-                self.peek_token(),
-                Some(Token {
-                    value: TokenKind::Directive(_),
-                    ..
-                })
-            )
-        {
-            body.push(self.parse_statement()?);
-        }
+                // body of the function
+                // essentially we parse it as statements without considering directive lines
+                while !parser.is_at_end()
+                    && !matches!(
+                        parser.peek_token(),
+                        Some(Token {
+                            value: TokenKind::Directive(_),
+                            ..
+                        })
+                    )
+                {
+                    body.push(parser.parse_statement()?);
+                }
+
+                Ok((parameters, return_type, signature_end, body))
+            })?;
 
         // After this function declaration
         let end = body
@@ -473,6 +504,7 @@ impl<'tokens> Parser<'tokens> {
         Ok(Located::new(
             TopLevelItem::Function(FunctionDeclaration {
                 name,
+                type_parameters,
                 parameters,
                 return_type,
                 body,
@@ -515,7 +547,10 @@ impl<'tokens> Parser<'tokens> {
         // Each part should be a valid identifier
         parts.push(self.expect_identifier()?);
 
-        while self.eat(&TokenKind::DoubleColon) {
+        // `::` followed by `[` is the start of explicit type arguments
+        // instead of another segment
+        while self.check(&TokenKind::DoubleColon) && !self.check_nth(1, &TokenKind::LeftBracket) {
+            self.advance()?;
             parts.push(self.expect_identifier()?);
         }
 
@@ -542,11 +577,160 @@ impl<'tokens> Parser<'tokens> {
         }
     }
 
+    /// Parses a comma separated list of at least one item
+    ///
+    /// Each item is parsed using the `parse_item` function, which should
+    /// return a result of that type T.
+    ///
+    /// The closing delimiter of the list is `close`, and the error to provide
+    /// if ther eis a trailing comma, etc blah, blah, `close` is `trailing_comma_error`
+    fn parse_delimited_list<T>(
+        &mut self,
+        close: &TokenKind,
+        trailing_comma_error: PhotonErrorKind,
+        mut parse_item: impl FnMut(&mut Self) -> PhotonResult<T>,
+    ) -> PhotonResult<Vec<T>> {
+        // Get all items
+        let mut items = Vec::new();
+
+        loop {
+            items.push(parse_item(self)?);
+
+            // another item
+            if self.eat(&TokenKind::Comma) {
+                if self.check(close) {
+                    // premature end
+                    return Err(PhotonErrorKind::error(
+                        trailing_comma_error,
+                        self.current_span(),
+                    ));
+                }
+
+                continue;
+            }
+
+            break;
+        }
+
+        // must be followed by the close
+        self.expect(close)?;
+
+        Ok(items)
+    }
+
+    /// Runs the following functions in `parse` with a parser that has all of the supplied
+    /// `type_paramaters` in its scope.
+    ///
+    /// Only the internal scope `parse` has the type parameters in scope, outside of this `parse`,
+    /// all the type parameters are returned.
+    fn with_type_parameters<T>(
+        &mut self,
+        type_parameters: &[String],
+        parse: impl FnOnce(&mut Self) -> PhotonResult<T>,
+    ) -> PhotonResult<T> {
+        let outer_scope =
+            std::mem::replace(&mut self.type_parameters_in_scope, type_parameters.to_vec());
+
+        let result = parse(self);
+
+        self.type_parameters_in_scope = outer_scope;
+
+        result
+    }
+
+    /// Parses an optional list of type parameters on a declaration
+    ///
+    /// This is the parameters the declaration takes rather than the ones it uses.
+    fn parse_type_parameter_list(&mut self) -> PhotonResult<Vec<String>> {
+        // [
+        if !self.eat(&TokenKind::LeftBracket) {
+            return Ok(Vec::new());
+        }
+
+        // T, U, V]
+        let parsed = self.parse_delimited_list(
+            &TokenKind::RightBracket,
+            PhotonErrorKind::UnexpectedEndOfTypeParamsFollowingComma,
+            |parser| {
+                let span = parser.current_span();
+                let name = parser.expect_identifier()?;
+
+                Ok((name, span))
+            },
+        )?;
+
+        // disallow duplicate type params, as else it doesnt make sense to bind func[T, T] etc.
+        // as it would make things a lot more complex
+        let mut names: Vec<String> = Vec::with_capacity(parsed.len());
+        for (name, span) in parsed {
+            if names.contains(&name) {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::DuplicateTypeParameter { name },
+                    span,
+                ));
+            }
+
+            names.push(name);
+        }
+
+        Ok(names)
+    }
+
+    /// Parses the arguments of a type application after the opening `[`
+    fn parse_type_arguments_after_open(&mut self) -> PhotonResult<Vec<TypeName>> {
+        self.parse_delimited_list(
+            &TokenKind::RightBracket,
+            PhotonErrorKind::UnexpectedEndOfTypeArgsFollowingComma,
+            |parser| parser.parse_type(),
+        )
+    }
+
+    /// Parses the explicit type arguments of a call if there are any
+    fn parse_optional_call_type_arguments(&mut self) -> PhotonResult<Option<Vec<TypeName>>> {
+        // Must be followed by a :: and a [ for it to be an optional call type arg
+        if !(self.check(&TokenKind::DoubleColon) && self.check_nth(1, &TokenKind::LeftBracket)) {
+            return Ok(None);
+        }
+
+        // If it is ::[, then we know it must be type arguments
+        self.expect(&TokenKind::DoubleColon)?;
+        self.expect(&TokenKind::LeftBracket)?;
+
+        Ok(Some(self.parse_type_arguments_after_open()?))
+    }
+
+    /// Turns a qualified name in a type position into a type
+    fn type_from_qualified_name(&self, name: QualifiedName) -> TypeName {
+        // if name is unqualified (no namespacing) then it can
+        // refer to one of the type parameters currently in scope
+        // and if it is then it should be a TypeName::GenericParameter instead of
+        // the actual qualified name ver
+        if name.is_unqualified()
+            && self
+                .type_parameters_in_scope
+                .iter()
+                .any(|parameter| parameter == name.last())
+        {
+            TypeName::GenericParameter(name.last().to_owned())
+        } else {
+            TypeName::from_qualified_name(name)
+        }
+    }
+
     /// Parse a type at the current position
     fn parse_type(&mut self) -> PhotonResult<TypeName> {
         let name = self.parse_qualified_name()?;
 
-        Ok(TypeName::from_qualified_name(name))
+        let parsed = self.type_from_qualified_name(name);
+
+        // type is followed by [ so it has type arguments
+        if self.eat(&TokenKind::LeftBracket) {
+            let arguments = self.parse_type_arguments_after_open()?;
+
+            return Ok(parsed.applied(arguments));
+        }
+
+        Ok(parsed)
     }
 
     /// Parse a parameter at the current position, this is some
@@ -575,36 +759,16 @@ impl<'tokens> Parser<'tokens> {
         // (
         self.expect(&TokenKind::LeftParen)?;
 
-        let mut parameters = Vec::new();
-
         // No parameters since it ends with )
         if self.eat(&TokenKind::RightParen) {
-            return Ok(parameters);
+            return Ok(Vec::new());
         }
 
-        loop {
-            // Not a direct end of right paren, parse params
-            parameters.push(self.parse_parameter()?);
-
-            // Another parameter
-            if self.eat(&TokenKind::Comma) {
-                if self.check(&TokenKind::RightParen) {
-                    // Premature end
-                    return Err(PhotonErrorKind::error(
-                        PhotonErrorKind::UnexpectedEndOfParamsFollowingComma,
-                        self.current_span(),
-                    ));
-                }
-
-                continue;
-            }
-
-            break;
-        }
-
-        self.expect(&TokenKind::RightParen)?;
-
-        Ok(parameters)
+        self.parse_delimited_list(
+            &TokenKind::RightParen,
+            PhotonErrorKind::UnexpectedEndOfParamsFollowingComma,
+            |parser| parser.parse_parameter(),
+        )
     }
 
     /// Parses an entire list of arguments etc.
@@ -616,35 +780,16 @@ impl<'tokens> Parser<'tokens> {
         // (
         self.expect(&TokenKind::LeftParen)?;
 
-        let mut arguments = Vec::new();
-
         // No parameters since it ends with )
         if self.eat(&TokenKind::RightParen) {
-            return Ok(arguments);
+            return Ok(Vec::new());
         }
 
-        loop {
-            arguments.push(self.parse_expression()?);
-
-            // Another argument
-            if self.eat(&TokenKind::Comma) {
-                if self.check(&TokenKind::RightParen) {
-                    // Premature end
-                    return Err(PhotonErrorKind::error(
-                        PhotonErrorKind::UnexpectedEndOfArgsFollowingComma,
-                        self.current_span(),
-                    ));
-                }
-
-                continue;
-            }
-
-            break;
-        }
-
-        self.expect(&TokenKind::RightParen)?;
-
-        Ok(arguments)
+        self.parse_delimited_list(
+            &TokenKind::RightParen,
+            PhotonErrorKind::UnexpectedEndOfArgsFollowingComma,
+            |parser| parser.parse_expression(),
+        )
     }
 
     /// Parses one statement at the current position
@@ -1489,7 +1634,11 @@ impl<'tokens> Parser<'tokens> {
         loop {
             // foo(...)
             // this is a function call.
-            if self.check(&TokenKind::LeftParen) {
+
+            // explicit type arguments that may be for this function call
+            let type_arguments = self.parse_optional_call_type_arguments()?;
+
+            if type_arguments.is_some() || self.check(&TokenKind::LeftParen) {
                 // parse all arguments to foo/some
                 let arguments = self.parse_argument_list()?;
                 let end = self.previous_span().end;
@@ -1497,6 +1646,7 @@ impl<'tokens> Parser<'tokens> {
                 expression = Located::new(
                     Expression::Call {
                         callee: Box::new(expression),
+                        type_arguments: type_arguments.unwrap_or_default(),
                         arguments,
                     },
                     (start..end).into(),
@@ -1529,8 +1679,11 @@ impl<'tokens> Parser<'tokens> {
             if self.eat(&TokenKind::Dot) {
                 let name = self.expect_identifier()?;
 
+                // explicit type arguments, that may be for this method call
+                let type_arguments = self.parse_optional_call_type_arguments()?;
+
                 // check if this is an object method call
-                if self.check(&TokenKind::LeftParen) {
+                if type_arguments.is_some() || self.check(&TokenKind::LeftParen) {
                     let arguments = self.parse_argument_list()?;
                     let end = self.previous_span().end;
 
@@ -1538,6 +1691,7 @@ impl<'tokens> Parser<'tokens> {
                         Expression::MethodCall {
                             receiver: Box::new(expression),
                             method: MethodName::Inferred(name),
+                            type_arguments: type_arguments.unwrap_or_default(),
                             arguments,
                         },
                         (start..end).into(),
@@ -1563,6 +1717,12 @@ impl<'tokens> Parser<'tokens> {
             // object->foo::bar(...)
             if self.eat(&TokenKind::Arrow) {
                 let name = self.parse_qualified_name()?;
+
+                // optional type arguments to this method call
+                let type_arguments = self
+                    .parse_optional_call_type_arguments()?
+                    .unwrap_or_default();
+
                 let arguments = self.parse_argument_list()?;
 
                 let end = self.previous_span().end;
@@ -1571,6 +1731,7 @@ impl<'tokens> Parser<'tokens> {
                     Expression::MethodCall {
                         receiver: Box::new(expression),
                         method: MethodName::Qualified(name),
+                        type_arguments,
                         arguments,
                     },
                     (start..end).into(),
@@ -1644,9 +1805,8 @@ impl<'tokens> Parser<'tokens> {
                 body_span,
             }) => Ok(Located::new(
                 Expression::Boson3 {
-                    declared_type: TypeName::from_qualified_name(QualifiedName::from_text(
-                        &declared_type,
-                    )),
+                    declared_type: self
+                        .type_from_qualified_name(QualifiedName::from_text(&declared_type)),
                     body,
                     body_span,
                 },
@@ -1669,40 +1829,19 @@ impl<'tokens> Parser<'tokens> {
         &mut self,
         start: usize,
     ) -> PhotonResult<Located<Expression>> {
-        // The final array elements set
-        let mut elements = Vec::new();
+         // parse the array elements set
+        let elements = if self.eat(&TokenKind::RightBracket) {
+            Vec::new()
+        } else {
+            self.parse_delimited_list(
+                &TokenKind::RightBracket,
+                PhotonErrorKind::UnexpectedEndOfArrayElemsFollowingComma,
+                |parser| parser.parse_expression(),
+            )?
+        };
 
-        // No array elements
-        if self.check(&TokenKind::RightBracket) {
-            let end = self.expect(&TokenKind::RightBracket)?.span.end;
-
-            return Ok(Located::new(
-                Expression::ArrayLiteral(elements),
-                (start..end).into(),
-            ));
-        }
-
-        // Element loop
-        loop {
-            elements.push(self.parse_expression()?);
-
-            // Elements must be followed by a comma
-            if self.eat(&TokenKind::Comma) {
-                if self.check(&TokenKind::RightBracket) {
-                    return Err(PhotonErrorKind::error(
-                        PhotonErrorKind::UnexpectedEndOfArrayElemsFollowingComma,
-                        self.current_span(),
-                    ));
-                }
-
-                continue;
-            }
-
-            break;
-        }
-
-        // Arrays should end in ]
-        let end = self.expect(&TokenKind::RightBracket)?.span.end;
+        // Both paths have consumed the closing ].
+        let end = self.previous_span().end;
 
         Ok(Located::new(
             Expression::ArrayLiteral(elements),
