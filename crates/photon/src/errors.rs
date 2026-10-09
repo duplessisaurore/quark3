@@ -251,53 +251,66 @@ pub enum PhotonErrorKind {
     /// and was invalid for the signature/instance
     InvalidGenericInstance {
         instance_type: TypeName,
-        signature: QualifiedName
+        signature: QualifiedName,
     },
 
     /// An invalid supplied type mismatch for this generic parameter
     InvalidSuppliedTypeForGenericParam {
         generic_parameter: String,
         expected: TypeName,
-        found: TypeName
+        found: TypeName,
     },
 
     /// When trying to infer types against some declared applied type
     /// the supplied type is not an applied type, but rather some other
     /// concrete type.
-    /// 
+    ///
     /// E.g for Queue<T> we are supplying Int which doesnt fit
-    NonAppliedSuppliedTypeForDeclaredSuppliedType {
-        supplied: TypeName 
-    },
+    NonAppliedSuppliedTypeForDeclaredSuppliedType { supplied: TypeName },
 
     /// When trying to infer types against some declared applied type
     /// the supplied types generic parameters mismatch in the number of arguments
     /// against the declared type
     AppliedTypeInferenceArgNMismatch {
         declared_argn: usize,
-        supplied_argn: usize 
+        supplied_argn: usize,
     },
 
     /// Unable to infer/find this type parameter after explicit and inferred type substitution
     /// during object type substiution
     UnknownObjectTypeParam {
         parameter: String,
-        object_type: QualifiedName
+        object_type: QualifiedName,
     },
 
     /// Unable to infer/find this type parameter after explicit and inferred type substitution
     /// during function type substiution
     UnknownFunctionTypeParam {
         parameter: String,
-        function: QualifiedName
+        function: QualifiedName,
     },
 
     /// Too many type parameters were passed for this generic resolution,
     TooManyExplicitTypeParams {
         name: QualifiedName,
         max: usize,
-        found: usize
-    }
+        found: usize,
+    },
+
+    /// Missing the function template for this function which we are
+    /// attempting to monomorphise and create a specialisation for
+    MissingFunctionTemplate { name: QualifiedName },
+
+    /// When registering a specialisation of a function for monomorphisation
+    /// a type argument still had an unresolved generic parameter
+    UnresolvedGenericParameterDuringMonomorph {
+        parameter: String,
+        function_name: QualifiedName,
+    },
+
+    /// Entry referred to a generic function! That like... doesn't make sense
+    /// what do you expect?
+    EntryGenericFunction { name: QualifiedName },
 }
 
 /// Located version of `PhotonErrorKind` w source span info
@@ -641,29 +654,84 @@ impl Display for PhotonErrorKind {
                     "attempted usage of operator `{operator}` on type operands of type `{operand_type}` where it is not defined"
                 )
             }
-            Self::InvalidGenericInstance { instance_type, signature } => {
+            Self::InvalidGenericInstance {
+                instance_type,
+                signature,
+            } => {
                 write!(
                     f,
                     "found invalid concrete instance `{instance_type}` for actual signature type `{signature}`"
-                )  
+                )
             }
-            Self::InvalidSuppliedTypeForGenericParam { generic_parameter, expected, found } => {
-                write!(f, "for generic parameter of type `{generic_parameter}` recieved type `{found}` mismatches expected concrete type `{expected}`")
+            Self::InvalidSuppliedTypeForGenericParam {
+                generic_parameter,
+                expected,
+                found,
+            } => {
+                write!(
+                    f,
+                    "for generic parameter of type `{generic_parameter}` recieved type `{found}` mismatches expected concrete type `{expected}`"
+                )
             }
             Self::NonAppliedSuppliedTypeForDeclaredSuppliedType { supplied } => {
-                write!(f, "expected some applied type Applied<Args> to be provided for type inference, instead found `{supplied}`")
+                write!(
+                    f,
+                    "expected some applied type Applied<Args> to be provided for type inference, instead found `{supplied}`"
+                )
             }
-            Self::AppliedTypeInferenceArgNMismatch { declared_argn, supplied_argn } => {
-                write!(f, "expected supplied type argument count `{supplied_argn}` to match declared type argument count `{declared_argn}` during type inference")
+            Self::AppliedTypeInferenceArgNMismatch {
+                declared_argn,
+                supplied_argn,
+            } => {
+                write!(
+                    f,
+                    "expected supplied type argument count `{supplied_argn}` to match declared type argument count `{declared_argn}` during type inference"
+                )
             }
-            Self::UnknownObjectTypeParam { parameter, object_type } => {
-                write!(f, "cannot infer type parameter `{parameter}` for object of type `{object_type}`")
+            Self::UnknownObjectTypeParam {
+                parameter,
+                object_type,
+            } => {
+                write!(
+                    f,
+                    "cannot infer type parameter `{parameter}` for object of type `{object_type}`"
+                )
             }
-            Self::UnknownFunctionTypeParam { parameter, function } => {
-                write!(f, "cannot infer type parameter `{parameter}` for function `{function}`")
+            Self::UnknownFunctionTypeParam {
+                parameter,
+                function,
+            } => {
+                write!(
+                    f,
+                    "cannot infer type parameter `{parameter}` for function `{function}`"
+                )
             }
             Self::TooManyExplicitTypeParams { name, max, found } => {
-                write!(f, "recieved too many explicit parameters during generic resolution for `{name}`, expected at most `{max}`, got `{found}`")
+                write!(
+                    f,
+                    "recieved too many explicit parameters during generic resolution for `{name}`, expected at most `{max}`, got `{found}`"
+                )
+            }
+            Self::EntryGenericFunction { name } => {
+                write!(
+                    f,
+                    "entry referred to a generic function `{name}`, this is not allowed.. like what type args would it even get?"
+                )
+            }
+            Self::MissingFunctionTemplate { name } => {
+                write!(
+                    f,
+                    "attempted to specialise `{name}` as a generic function, but this function's generic template could not be found. does it even take type parameters?"
+                )
+            }
+            Self::UnresolvedGenericParameterDuringMonomorph {
+                parameter,
+                function_name,
+            } => {
+                write!(
+                    f,
+                    "when specialising `{function_name}` as a generic function, found an unresolved generic parameter `{parameter}`!"
+                )
             }
         }
     }
@@ -783,15 +851,11 @@ pub enum TypeMismatchSource {
 
     /// Inferrence of an object's types based of supplied
     /// arguments compared to it's declared type params
-    ObjectTypeInferrence {
-        field: String
-    },
+    ObjectTypeInferrence { field: String },
 
     /// Inferrence of an functions's types based of supplied
     /// arguments compared to it's declared type params
-    FunctionTypeInferrence {
-        argn: usize
-    },
+    FunctionTypeInferrence { argn: usize },
 }
 
 impl Display for TypeMismatchSource {
@@ -927,10 +991,16 @@ impl Display for TypeMismatchSource {
                 write!(f, "the right-hand side operand to a binary expression")
             }
             TypeMismatchSource::ObjectTypeInferrence { field } => {
-                write!(f, "in the type inferrence for object's type parameters against its concrete arguments for field `{field}`")
+                write!(
+                    f,
+                    "in the type inferrence for object's type parameters against its concrete arguments for field `{field}`"
+                )
             }
             TypeMismatchSource::FunctionTypeInferrence { argn } => {
-                write!(f, "in the type inferrence for functions's type parameters against its concrete arguments for arg #`{argn}`")
+                write!(
+                    f,
+                    "in the type inferrence for functions's type parameters against its concrete arguments for arg #`{argn}`"
+                )
             }
         }
     }

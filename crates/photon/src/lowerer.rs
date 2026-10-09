@@ -8,7 +8,10 @@
 //! - resolving types (simply)
 //! - resolving whether things produce values or not and handling void appropriately with drop
 
-use std::{collections::HashMap, fmt::Display};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+};
 
 use crate::{
     ast::{
@@ -16,7 +19,7 @@ use crate::{
         Module, ObjectDeclaration, Parameter, QualifiedName, SimpleStatement, SourceSpan,
         Statement, StepOperator, TopLevelItem, TypeName, TypeSubstitutionMap, UnaryOperator,
     },
-    errors::{PhotonErrorKind, PhotonResult, TypeMismatchSource},
+    errors::{PhotonError, PhotonErrorKind, PhotonResult, TypeMismatchSource},
 };
 
 /// The output of the lowering phase,
@@ -70,6 +73,11 @@ enum AssignmentTarget {
 #[derive(Debug)]
 struct FunctionContext {
     locals: HashMap<String, TypeName>,
+
+    // Concrete types for the generic parameters of this function instance.
+    //
+    // This is used for the monomorphisation of the functions similar to cpp
+    substitution: TypeSubstitutionMap,
 
     // The return type, technically we could get this from the
     // symbol table and drill that, but its easier to just store it here
@@ -125,13 +133,288 @@ pub struct ObjectSignature {
 /// The actual lowerer itself, this is responsible
 /// for handling the lowering from the produced `ast` to
 /// boson3 source code with std.b3 included.
-pub struct Lowerer<'symbols, 'source_map, 'module> {
+pub struct Lowerer<'symbols, 'source_map, 'module, 'monomorphs> {
     /// All of the introduced names/elements that
     /// can be referred to by a symbol in the current context
     /// globally (see: `FunctionContext`)
     symbols: &'symbols SymbolTable,
     source_map: &'source_map SourceMap,
     module: &'module Module,
+
+    // The monomorphisations currently available to the lowerer
+    //
+    // Because we may discover new monomorphisations to make we need to hold
+    // a mutable reference to this
+    monomorphisations: &'monomorphs mut Monomorphisations,
+}
+
+/// One registered function instance in the work list of the lowerer coordinator.
+///
+/// The first pass of all modules puts all these specialisations used in a work-list
+/// which then we lower in a second pass for the real function bodies.
+#[derive(Debug, Clone)]
+struct Specialisation {
+    /// Index of the defining module in the coordinator's inputs that
+    /// we can map back onto to get the module this was declalred with
+    module_index: usize,
+
+    /// Index of the generic function declaration in that module's top level items
+    item_index: usize,
+
+    /// the full qualified name to refer to the specific instance/specialisation of this
+    /// function with e.g blah::add_mono0
+    name: QualifiedName,
+
+    /// Resolved types in the original function's type-parameter order for this specialisation
+    type_arguments: Vec<TypeName>,
+}
+
+/// Registry for all monomorphisations and instances used
+/// for all of the modules being lowered.
+///
+/// We need to share it so modules can call instanced functions in other modules.
+#[derive(Debug, Clone)]
+struct Monomorphisations {
+    /// original generic function name to where it is in the input modules and in the top
+    /// level items of that module
+    templates: HashMap<QualifiedName, (usize, usize)>,
+
+    /// original function name and concrete types mapping to concrete qualified name for that instance
+    ///
+    /// basically a cache for lookup so we can map back to the same instance for same type args
+    names: HashMap<(QualifiedName, Vec<TypeName>), QualifiedName>,
+
+    /// names already occupied by functions, objects, globals, capabilities,
+    /// or generated instances etc., we dont want our generated monomorph instances to conflict! KABOOOOOMYMMM if they do
+    /// and head many scratch :(
+    reserved_names: HashSet<QualifiedName>,
+
+    /// work list of all registered instances of a function specialisation which produces
+    /// a monomorph instance
+    ///
+    /// we push these during first pass, resolve in second pass
+    pending: Vec<Specialisation>,
+
+    /// next numeric suffix to try when generating a `__mono_` name for a specific
+    /// monomorp instance of a function
+    next_name: usize,
+}
+
+impl Monomorphisations {
+    /// Collect generic definitions for all monomorphisation templates
+    ///
+    /// `symbols` supplies function, object, and global names that we want to avoid kabooming with
+    fn new(symbols: &SymbolTable, inputs: &[(&Module, &SourceMap)]) -> Self {
+        // make a new empty registry with reserved objects, gllobals and function
+        // names so we dont accidentally conflict with them.
+        //
+        // capabilities are added in the later pass
+        let mut state = Self {
+            templates: HashMap::new(),
+            names: HashMap::new(),
+            reserved_names: symbols
+                .functions
+                .keys()
+                .chain(symbols.objects.keys())
+                .chain(symbols.globals.keys())
+                .cloned()
+                .collect(),
+            pending: Vec::new(),
+            next_name: 0,
+        };
+
+        // go through each module
+        for (module_index, (module, _)) in inputs.iter().enumerate() {
+            for (item_index, item) in module.items.iter().enumerate() {
+                // add capabilities to reserved names too, and store the function template for this generic function
+                match &item.value {
+                    TopLevelItem::Function(function) if !function.type_parameters.is_empty() => {
+                        let name = QualifiedName::from_text(&function.name)
+                            .qualify_from(&module.namespace);
+
+                        state.templates.insert(name, (module_index, item_index));
+                    }
+                    TopLevelItem::Capability(capability) => {
+                        state.reserved_names.insert(
+                            QualifiedName::from_text(&capability.name)
+                                .qualify_from(&module.namespace),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        state
+    }
+
+    /// Return the emitted name for a generic call
+    ///
+    /// This will automatically handle mappings to the same instance generated
+    /// if the type arguments and function called r the same, otherwise generating
+    /// a new specialisation of the function.
+    fn register(
+        &mut self,
+        function: &QualifiedName,
+        type_arguments: Vec<TypeName>,
+        span: SourceSpan,
+    ) -> PhotonResult<QualifiedName> {
+        // Find existing instance if it exists
+        let key = (function.clone(), type_arguments.clone());
+        if let Some(name) = self.names.get(&key) {
+            return Ok(name.clone());
+        }
+
+        // Try find the template for this function which we are generating with
+        let &(module_index, item_index) = self.templates.get(function).ok_or_else(|| {
+            PhotonErrorKind::error(
+                PhotonErrorKind::MissingFunctionTemplate {
+                    name: function.clone(),
+                },
+                span,
+            )
+        })?;
+
+        // ensure all of the types are concretised for this specific instance we are registsering,
+        // else kaboom, (aka basically ensrue no generic parameters are left)
+        let mut types: Vec<&TypeName> = type_arguments.iter().collect();
+        while let Some(current_check_type) = types.pop() {
+            match current_check_type {
+                // unresolved generic parameter of this specliasation
+                TypeName::GenericParameter(parameter) => {
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::UnresolvedGenericParameterDuringMonomorph {
+                            parameter: parameter.clone(),
+                            function_name: function.clone(),
+                        },
+                        span,
+                    ));
+                }
+                // maybe will contain an unresolved sub-param
+                TypeName::Applied {
+                    constructor,
+                    arguments,
+                } => {
+                    types.push(constructor.as_ref());
+                    types.extend(arguments);
+                }
+                _ => {}
+            }
+        }
+
+        // Generate new monomorph instance name for this function
+        //
+        // we essentially loop around this name __mono__<next_name> until
+        // we hit a non-reserved name.
+        let name = loop {
+            let mut name = function.clone();
+            let new_name = format!("{}__mono_{}", function.last(), self.next_name);
+
+            // update name with new_name
+            *name
+                .segments
+                .last_mut()
+                .expect("function has a name, should be handled by the parser") = new_name;
+
+            self.next_name += 1;
+
+            // if its a reserved name try the next index
+            if self.reserved_names.insert(name.clone()) {
+                break name;
+            }
+        };
+
+        // Register before lowering the body so recursive calls reuse this name.
+        self.names.insert(key, name.clone());
+
+        // push specialisation for second pass to resolve
+        self.pending.push(Specialisation {
+            module_index,
+            item_index,
+            name: name.clone(),
+            type_arguments,
+        });
+
+        Ok(name)
+    }
+}
+
+/// Lower all Photon3 modules together
+///
+/// We need to lower them all together because we need to consider monomorphisations
+/// across modules.
+///
+/// # Errors
+///
+/// This will error in many ways, for example if lowering fails on one module, or
+/// if monomorphisations have an issue etc.
+///
+/// See `PhotonError` for specific lowering errors.
+///
+/// The error return type is which specific input module (usize index into that) produced
+/// this ereror, and the actual error for that module.
+pub fn lower_modules(
+    symbols: &SymbolTable,
+    inputs: &[(&Module, &SourceMap)],
+) -> Result<Vec<LoweredModule>, (usize, PhotonError)> {
+    // Create a new monomorph regisitry for all of these modules.
+    let mut monomorphisations = Monomorphisations::new(symbols, inputs);
+
+    // And full output for each module
+    let mut outputs = Vec::with_capacity(inputs.len());
+
+    // Lower each module initially
+    //
+    // this will basically register eacah monomorphisation specialisation into
+    // `pending` in `monomorphisations`
+    for (index, &(module, source_map)) in inputs.iter().enumerate() {
+        let mut lowerer = Lowerer::new(symbols, source_map, module, &mut monomorphisations);
+        outputs.push(
+            lowerer
+                .lower_module_items()
+                .map_err(|error| (index, error))?,
+        );
+    }
+
+    // recursively keep resolving all of the specialisations in monomorphisations until
+    // we are done with all monomorph instance generation
+    loop {
+        // get next instance to resolve, otherwise we are done
+        let instance = monomorphisations.pending.pop();
+        let Some(instance) = instance else { 
+            break 
+        };
+
+        // get the specific module and source map this specialisation belongs to
+        let (module, source_map) = inputs[instance.module_index];
+
+        // get the actual function
+        let item = &module.items[instance.item_index];
+        let TopLevelItem::Function(function) = &item.value else {
+            unreachable!("only function declarations are registered as templates by `register` and during lowering bleh");
+        };
+
+        // the specific type arguments to use during this specialisation for all the type parameters
+        let substitution = function
+            .type_parameters
+            .iter()
+            .cloned()
+            .zip(instance.type_arguments)
+            .collect();
+
+
+        // lower this specific function with these specific type arguments
+        let mut lowerer = Lowerer::new(symbols, source_map, module, &mut monomorphisations);
+        let code = lowerer
+            .lower_function(function, instance.name.last(), substitution)
+            .map_err(|error| (instance.module_index, error))?;
+
+        // add to the output for this specific module
+        let output = &mut outputs[instance.module_index].contents;
+        output.push('\n');
+        output.push_str(&lowerer.with_source_location(item.span, code));
+    }
+
+    Ok(outputs)
 }
 
 impl LoweredExpression {
@@ -324,7 +607,11 @@ impl ObjectSignature {
         // as it can be difficutl to understand why things arent working
         if explicit_type_arguments.len() > self.type_parameters.len() {
             return Err(PhotonErrorKind::error(
-                PhotonErrorKind::TooManyExplicitTypeParams { name: self.name.clone(), max: self.type_parameters.len(), found: explicit_type_arguments.len() },
+                PhotonErrorKind::TooManyExplicitTypeParams {
+                    name: self.name.clone(),
+                    max: self.type_parameters.len(),
+                    found: explicit_type_arguments.len(),
+                },
                 span,
             ));
         }
@@ -403,16 +690,16 @@ impl ObjectSignature {
 }
 
 impl FunctionSignature {
-    /// Checks the types supplied to one function/method call and returns the
-    /// concrete return type for that call.
+    /// Check a call and return its concrete return type and type arguments.
     ///
+    /// Type arguments are ordered by the function's declared type parameters.
     /// This essentially resolves all the type params, args and return type with that in mind.
-    fn check_call_and_resolve_return_type(
+    fn check_call_and_resolve_types(
         &self,
         explicit_type_arguments: &[TypeName],
         provided_types: &[TypeName],
         span: SourceSpan,
-    ) -> PhotonResult<TypeName> {
+    ) -> PhotonResult<(TypeName, Vec<TypeName>)> {
         // Ensure we have enough concrete parameters for their actual types
         expect_argument_count(self.parameters.len(), provided_types.len(), span)?;
 
@@ -420,7 +707,11 @@ impl FunctionSignature {
         // as it can be difficutl to understand why things arent working
         if explicit_type_arguments.len() > self.type_parameters.len() {
             return Err(PhotonErrorKind::error(
-                PhotonErrorKind::TooManyExplicitTypeParams { name: self.name.clone(), max: self.type_parameters.len(), found: explicit_type_arguments.len() },
+                PhotonErrorKind::TooManyExplicitTypeParams {
+                    name: self.name.clone(),
+                    max: self.type_parameters.len(),
+                    found: explicit_type_arguments.len(),
+                },
                 span,
             ));
         }
@@ -478,7 +769,14 @@ impl FunctionSignature {
             )?;
         }
 
-        Ok(self.return_type.substitute(&substitution))
+        // Resolve all concrete type arguments for the type params
+        let type_arguments = self
+            .type_parameters
+            .iter()
+            .map(|parameter| substitution[parameter].clone())
+            .collect();
+
+        Ok((self.return_type.substitute(&substitution), type_arguments))
     }
 }
 
@@ -647,32 +945,31 @@ impl SymbolTable {
     }
 }
 
-impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
+impl<'symbols, 'source_map, 'module, 'monomorphs>
+    Lowerer<'symbols, 'source_map, 'module, 'monomorphs>
+{
     /// Create a new lowerer over the original content `source` that will lower
     /// all of the items in `module` down into the associated string std.b3 form.
     ///
     /// The `namespace`
-    pub fn new(
+    fn new(
         symbols: &'symbols SymbolTable,
         source_map: &'source_map SourceMap,
         module: &'module Module,
+        monomorphisations: &'monomorphs mut Monomorphisations,
     ) -> Self {
         Self {
             symbols,
             source_map,
             module,
+            monomorphisations,
         }
     }
 
-    /// Fully outputs the lowered module based on this lowerer's input components
+    /// Lower all the top items of a module to their stringified `LoweredModule` form.
     ///
-    /// # Errors
-    ///
-    /// If the lowering fails in any way, such as illegal or duplicate elements
-    /// etc. then this will return that corresponding error!
-    ///
-    /// See `PhotonError` for more details.
-    pub fn lower_to_string(&self) -> PhotonResult<LoweredModule> {
+    /// This should only be called with monomorphisations available
+    fn lower_module_items(&mut self) -> PhotonResult<LoweredModule> {
         let mut output_string = Vec::new();
 
         // insert original source file location for module
@@ -689,12 +986,28 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     }
 
     /// Lowers one top level item declaration down into its code/string variant
-    fn lower_top_level_item(&self, item: &Located<TopLevelItem>) -> PhotonResult<String> {
+    fn lower_top_level_item(&mut self, item: &Located<TopLevelItem>) -> PhotonResult<String> {
         let code = match &item.value {
             // namespace guaranteed to be uniq alr due to parser
             TopLevelItem::Namespace(namespace) => format!("@namespace {namespace}"),
             TopLevelItem::Requires(namespace) => format!("@requires {namespace}"),
-            TopLevelItem::Entry(function) => format!("@entry {function}"),
+            TopLevelItem::Entry(function) => {
+                // Make sure the entry function is not a genereic function/has no type parameters.
+                // else bad things will happen.
+                let name = QualifiedName::from_text(function).resolve(&self.module.namespace);
+                if self
+                    .symbols
+                    .function(&name)
+                    .is_some_and(|signature| !signature.type_parameters.is_empty())
+                {
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::EntryGenericFunction { name },
+                        item.span,
+                    ));
+                }
+
+                format!("@entry {function}")
+            }
             TopLevelItem::Capability(capability) => {
                 format!("@capability {} {}", capability.name, capability.number)
             }
@@ -708,14 +1021,32 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     .join(", ");
                 format!("@object {} ({field_names})", object.name)
             }
-            TopLevelItem::Function(function) => self.lower_function(function)?,
+            TopLevelItem::Function(function) => {
+                if !function.type_parameters.is_empty() {
+                    // We only emit concrete functions for
+                    // generic functions on use for that specific instance
+                    return Ok(String::new());
+                }
+
+                self.lower_function(function, &function.name, TypeSubstitutionMap::new())?
+            }
         };
 
         Ok(self.with_source_location(item.span, code))
     }
 
     /// Lowers one function down into it's string code version.
-    fn lower_function(&self, function: &FunctionDeclaration) -> PhotonResult<String> {
+    ///
+    /// `emitted_name` should be the actual concrete emitted name of
+    /// this function's instance, and `substitution` should be a substitution map
+    /// used by this function to produce the real underlying concrete types
+    /// of this function's instance
+    fn lower_function(
+        &mut self,
+        function: &FunctionDeclaration,
+        emitted_name: &str,
+        substitution: TypeSubstitutionMap,
+    ) -> PhotonResult<String> {
         // Create a function context, this is mapping of all the locals to
         // their expected types and the ret type which we pass to all sub-statements
         // of this function for type validation
@@ -736,15 +1067,22 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 .map(|parameter| {
                     (
                         parameter.name.clone(),
-                        parameter.declared_type.canonicalise(&self.module.namespace),
+                        parameter
+                            .declared_type
+                            .canonicalise(&self.module.namespace)
+                            .substitute(&substitution),
                     )
                 })
                 .collect(),
-            ret_type: function.return_type.canonicalise(&self.module.namespace),
+            ret_type: function
+                .return_type
+                .canonicalise(&self.module.namespace)
+                .substitute(&substitution),
+            substitution,
         };
 
         // lower each sub-statement of the function in the current context.
-        let mut output = vec![format!("@fn {} ({parameter_names})", function.name)];
+        let mut output = vec![format!("@fn {emitted_name} ({parameter_names})")];
         for statement in &function.body {
             output.push(self.lower_statement(statement, &mut context)?);
         }
@@ -755,7 +1093,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     /// Lowers one statement down into its source code, this statement is being ran
     /// in the context of the function `context`.
     fn lower_statement(
-        &self,
+        &mut self,
         statement: &Located<Statement>,
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
@@ -800,7 +1138,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers one loop statement down into source code
     fn lower_loop_statement(
-        &self,
+        &mut self,
         body: &Vec<Located<Statement>>,
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
@@ -810,7 +1148,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers a statement block down into source code (a block is essentially just a Vec<Statement>)
     fn lower_statement_block(
-        &self,
+        &mut self,
         block: &Vec<Located<Statement>>,
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
@@ -863,7 +1201,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers a foreach statement in the current function context,
     fn lower_foreach_statement(
-        &self,
+        &mut self,
         span: SourceSpan,
         binding: &Parameter,
         array: &Located<Expression>,
@@ -879,7 +1217,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         )?;
 
         // type of the local binding
-        let binding_type = binding.declared_type.canonicalise(&self.module.namespace);
+        let binding_type = self.resolve_type(&binding.declared_type, context);
 
         // ensure binding type matches array type if it has some
         if let Some(element_type) = array.value_type.array_element_type() {
@@ -905,7 +1243,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers a for statement in the current function context,
     fn lower_for_statement(
-        &self,
+        &mut self,
         initialiser: &Option<Located<SimpleStatement>>,
         condition: &Located<Expression>,
         step: &Box<Option<Located<SimpleStatement>>>,
@@ -950,7 +1288,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers a dowhile statement in the current function context,
     fn lower_dowhile_statement(
-        &self,
+        &mut self,
         body: &Vec<Located<Statement>>,
         condition: &Located<Expression>,
         context: &mut FunctionContext,
@@ -975,7 +1313,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers a while statement in the current function context,
     fn lower_while_statement(
-        &self,
+        &mut self,
         condition: &Located<Expression>,
         body: &Vec<Located<Statement>>,
         context: &mut FunctionContext,
@@ -1003,7 +1341,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     /// If the expression is non-void it's value is dropped, otherwise
     /// the void expression is assumed to drop its value.
     fn lower_expression_statement(
-        &self,
+        &mut self,
         expression: &Located<Expression>,
         context: &FunctionContext,
     ) -> PhotonResult<String> {
@@ -1019,7 +1357,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     //// Lowers a simple statement in the current function context,
     fn lower_simple_statement(
-        &self,
+        &mut self,
         statement: &SimpleStatement,
         span: SourceSpan,
         context: &mut FunctionContext,
@@ -1047,7 +1385,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     //// Lowers an assignment statement in the current function context
     fn lower_assignment(
-        &self,
+        &mut self,
         target: &Located<Expression>,
         operator: AssignmentOperator,
         value: &Located<Expression>,
@@ -1268,7 +1606,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     //// Lowers a let statement in the current function context,
     /// essentially just a declaration
     fn lower_let_statement(
-        &self,
+        &mut self,
         name: &str,
         type_annotation: &Option<TypeName>,
         initialiser: &Located<Expression>,
@@ -1299,7 +1637,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers an if statement in the current function context,
     fn lower_if_statement(
-        &self,
+        &mut self,
         condition: &Located<Expression>,
         then_body: &Vec<Located<Statement>>,
         else_body: &Option<Vec<Located<Statement>>>,
@@ -1337,7 +1675,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers a return statement in the current function context,
     fn lower_return_statement(
-        &self,
+        &mut self,
         value: &Option<Located<Expression>>,
         span: SourceSpan,
         context: &FunctionContext,
@@ -1386,7 +1724,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     /// Attempts to lower an expression in return position as a tail call.
     /// returns an option dictating whether or not it could (with the produced code)
     fn lower_tail_call(
-        &self,
+        &mut self,
         expression: &Located<Expression>,
         expected_return_type: &TypeName,
         context: &FunctionContext,
@@ -1447,7 +1785,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 // resolve type arguments
                 let explicit_type_arguments = type_arguments
                     .iter()
-                    .map(|explicit_type| explicit_type.canonicalise(&self.module.namespace))
+                    .map(|explicit_type| self.resolve_type(explicit_type, context))
                     .collect::<Vec<_>>();
 
                 // types of arguments
@@ -1457,7 +1795,8 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                     .collect::<Vec<_>>();
 
                 // validate all argument types/explicit types against signature and get return type
-                let resolved_return_type = signature.check_call_and_resolve_return_type(
+                let (resolved_name, resolved_return_type) = self.resolve_function_call(
+                    signature,
                     &explicit_type_arguments,
                     &actual_types,
                     span,
@@ -1527,7 +1866,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 // resolve type arguments
                 let explicit_type_arguments = type_arguments
                     .iter()
-                    .map(|explicit_type| explicit_type.canonicalise(&self.module.namespace))
+                    .map(|explicit_type| self.resolve_type(explicit_type, context))
                     .collect::<Vec<_>>();
 
                 // types of arguments
@@ -1536,7 +1875,8 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 actual_types.extend(arguments.iter().map(|argument| argument.value_type.clone()));
 
                 // validate all argument types/explicit types against signature and get return type
-                let resolved_return_type = signature.check_call_and_resolve_return_type(
+                let (method_name, resolved_return_type) = self.resolve_function_call(
+                    signature,
                     &explicit_type_arguments,
                     &actual_types,
                     span,
@@ -1560,12 +1900,47 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         }
     }
 
+    /// Resolve a source type in the definition's namespace, then substitute the
+    /// concrete arguments of the current function instance.
+    fn resolve_type(&self, ty: &TypeName, context: &FunctionContext) -> TypeName {
+        ty.canonicalise(&self.module.namespace)
+            .substitute(&context.substitution)
+    }
+
+    /// Check a call and select the emitted function
+    ///
+    /// This will find the explicit monomorphised call to use
+    /// for these type arguments
+    fn resolve_function_call(
+        &mut self,
+        signature: &FunctionSignature,
+        explicit_type_arguments: &[TypeName],
+        actual_types: &[TypeName],
+        span: SourceSpan,
+    ) -> PhotonResult<(QualifiedName, TypeName)> {
+        // Get the return type nad type arguments to use for this fucntion.
+        let (return_type, type_arguments) =
+            signature.check_call_and_resolve_types(explicit_type_arguments, actual_types, span)?;
+
+        // If we have no type arguments, just use the normal function
+        let name = if type_arguments.is_empty() {
+            signature.name.clone()
+        } else {
+            // Otherwise, register a new monomorphisation or use an existing one
+            // for these specific type arguments
+            self.monomorphisations
+                .register(&signature.name, type_arguments, span)?
+        };
+
+        Ok((name, return_type))
+    }
+
     /// Lowers a set of argument expressions in a function context.
     ///
     /// This essentially lowers each argument expression, expecting it to contain
     /// a value.
     fn lower_arguments(
-        &self,
+        &mut self,
         arguments: &[Located<Expression>],
         context: &FunctionContext,
         source: TypeMismatchSource,
@@ -1580,7 +1955,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     ///
     /// This essentially lowers the set, expecting only one argument expression back.
     fn expect_lower_single_argument(
-        &self,
+        &mut self,
         arguments: &[Located<Expression>],
         span: SourceSpan,
         context: &FunctionContext,
@@ -1598,22 +1973,20 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     /// Expects that the lowered expression returns this type,
     /// returning the corresponding typemismatch error if not matching.
     fn expect_lowered_expression_type(
-        &self,
+        &mut self,
         expression: &Located<Expression>,
         expected_type: &TypeName,
         context: &FunctionContext,
         source: TypeMismatchSource,
     ) -> PhotonResult<LoweredExpression> {
-        let expected_type = expected_type.canonicalise(&self.module.namespace);
+        let expected_type = self.resolve_type(expected_type, context);
 
-        // If the expression is an array literal, it can use the type from `expected_type`
-        // to specify itself better, rather than being an Array<Any>
+        // Array literals can use the surrounding annotation or return type,
+        // including when there are no elements from which to infer a type.
         let lowered = match &expression.value {
-            Expression::ArrayLiteral(elements) => self.lower_array_lit_expr(
-                elements,
-                context,
-                expected_type.array_element_type(),
-            )?,
+            Expression::ArrayLiteral(elements) => {
+                self.lower_array_lit_expr(elements, context, expected_type.array_element_type())?
+            }
             _ => self.lower_expression(expression, context)?,
         };
 
@@ -1623,7 +1996,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers an expression where the expression must return a value (non-void).
     fn expect_lowered_expression_value(
-        &self,
+        &mut self,
         expression: &Located<Expression>,
         context: &FunctionContext,
         source: TypeMismatchSource,
@@ -1684,7 +2057,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     /// Lowers a should-be array and should-be index expression
     /// down into a pair of the lowered array and index expressions.
     fn lower_array_index(
-        &self,
+        &mut self,
         array: &Located<Expression>,
         index: &Located<Expression>,
         context: &FunctionContext,
@@ -1742,7 +2115,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
     /// Lowers a Photon3 expression into the LoweredExpression holding the code
     /// used to produce the expression's value and the type of this value.
     fn lower_expression(
-        &self,
+        &mut self,
         expression: &Located<Expression>,
         context: &FunctionContext,
     ) -> PhotonResult<LoweredExpression> {
@@ -1809,7 +2182,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             } => {
                 // map into source and return as expr of type, we dont normalise bcz it should do what it says.
                 let boson3_source = self.lower_boson3_statement(body, *body_span)?;
-                let expr_type = declared_type.canonicalise(&self.module.namespace);
+                let expr_type = self.resolve_type(declared_type, context);
                 LoweredExpression::value(boson3_source, expr_type)
             }
         };
@@ -1862,7 +2235,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers one expression reinterpretation/cast down in the current context of a function
     fn lower_cast_expr(
-        &self,
+        &mut self,
         expression: &Located<Expression>,
         target_type: &TypeName,
         span: SourceSpan,
@@ -1876,7 +2249,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         )?;
 
         // Target type we are casting to with this new expression
-        let target_type = target_type.canonicalise(&self.module.namespace);
+        let target_type = self.resolve_type(target_type, context);
 
         // Void casts are illegal, as thats just drop bruh
         if target_type == TypeName::Void {
@@ -1891,7 +2264,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers one array index access expression in the current context of a function
     fn lower_array_index_expr(
-        &self,
+        &mut self,
         array: &Box<Located<Expression>>,
         index: &Box<Located<Expression>>,
         context: &FunctionContext,
@@ -1919,7 +2292,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers one conditional  expression in the current context of a function
     fn lower_conditional_expr(
-        &self,
+        &mut self,
         condition: &Box<Located<Expression>>,
         when_true: &Box<Located<Expression>>,
         when_false: &Box<Located<Expression>>,
@@ -1966,7 +2339,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers one unary expression in the current context of a function
     fn lower_unary_expr(
-        &self,
+        &mut self,
         operator: UnaryOperator,
         operand: &Box<Located<Expression>>,
         span: SourceSpan,
@@ -2010,7 +2383,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers one array literal expression in the current context of a function
     fn lower_array_lit_expr(
-        &self,
+        &mut self,
         elements: &Vec<Located<Expression>>,
         context: &FunctionContext,
         expected_element_type: Option<&TypeName>,
@@ -2032,7 +2405,11 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
                 })
                 .collect::<PhotonResult<Vec<_>>>()?
         } else {
-            self.lower_arguments(elements, context, TypeMismatchSource::ArrayLiteralExpression)?
+            self.lower_arguments(
+                elements,
+                context,
+                TypeMismatchSource::ArrayLiteralExpression,
+            )?
         };
 
         // get the type of all the elements for the overall type of the array
@@ -2064,7 +2441,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers one call expression in the current context of a function
     fn lower_call_expr(
-        &self,
+        &mut self,
         callee: &Located<Expression>,
         type_arguments: &[TypeName],
         arguments: &[Located<Expression>],
@@ -2090,7 +2467,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         // Get type arguments for resolving
         let explicit_type_arguments = type_arguments
             .iter()
-            .map(|explicit_type| explicit_type.canonicalise(&self.module.namespace))
+            .map(|explicit_type| self.resolve_type(explicit_type, context))
             .collect::<Vec<_>>();
 
         // Object constructor
@@ -2149,12 +2526,9 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
             .collect::<Vec<_>>();
 
         // check types of arguments and explicit type params and get
-        // our actual return type
-        let resolved_return_type = signature.check_call_and_resolve_return_type(
-            &explicit_type_arguments,
-            &actual_types,
-            span,
-        )?;
+        // our actual return type and the actual name of the monomorphised function
+        let (resolved_name, resolved_return_type) =
+            self.resolve_function_call(signature, &explicit_type_arguments, &actual_types, span)?;
 
         let call_code = format!(
             "!std::call {resolved_name} ( {} )",
@@ -2166,7 +2540,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers a potential intrinsic call in the current context of a function
     fn lower_intrinsic_call(
-        &self,
+        &mut self,
         name: &QualifiedName,
         arguments: &[Located<Expression>],
         span: SourceSpan,
@@ -2272,7 +2646,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers a method call in the current context of a function
     fn lower_method_call(
-        &self,
+        &mut self,
         receiver: &Located<Expression>,
         method: &MethodName,
         type_arguments: &[TypeName],
@@ -2327,7 +2701,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         // get explicit type arguments to this method call
         let explicit_type_arguments = type_arguments
             .iter()
-            .map(|explicit_type| explicit_type.canonicalise(&self.module.namespace))
+            .map(|explicit_type| self.resolve_type(explicit_type, context))
             .collect::<Vec<_>>();
 
         // actual types of all the method params
@@ -2336,12 +2710,9 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         actual_types.extend(arguments.iter().map(|argument| argument.value_type.clone()));
 
         // check types of arguments and explicit type params and get
-        // our actual return type
-        let resolved_return_type = signature.check_call_and_resolve_return_type(
-            &explicit_type_arguments,
-            &actual_types,
-            span,
-        )?;
+        // our actual return type and concrete monomorphised name of the method
+        let (method_name, resolved_return_type) =
+            self.resolve_function_call(signature, &explicit_type_arguments, &actual_types, span)?;
 
         let call_code = format!(
             "!std::object_method {} -> {method_name} ( {} )",
@@ -2354,7 +2725,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers a potential array method call in the current context of a function
     fn lower_array_method(
-        &self,
+        &mut self,
         receiver: &LoweredExpression,
         method: &MethodName,
         arguments: &[Located<Expression>],
@@ -2468,7 +2839,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers an object field access in the current context of a function
     fn lower_field_access(
-        &self,
+        &mut self,
         receiver: &Located<Expression>,
         field: &str,
         span: SourceSpan,
@@ -2503,11 +2874,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
         })?;
 
         // Ensure this object field actually exists
-        let field_type = object.field_type_for_instance(
-            &receiver.value_type,
-            field,
-            span,
-        )?;
+        let field_type = object.field_type_for_instance(&receiver.value_type, field, span)?;
 
         Ok(LoweredExpression::value(
             format!(
@@ -2522,7 +2889,7 @@ impl<'symbols, 'source_map, 'module> Lowerer<'symbols, 'source_map, 'module> {
 
     /// Lowers a binary operation expression in the current context of a function
     fn lower_binary_expr(
-        &self,
+        &mut self,
         left: &Located<Expression>,
         operator: BinaryOperator,
         right: &Located<Expression>,

@@ -10,7 +10,6 @@
 //! The `Photon3` crate is a crate that desugars some extra `Photon3` syntax
 //! and type information ontop of `Boson3` std.b3.
 
-use std::collections::HashMap;
 use std::{fs, path::PathBuf};
 
 use clap::Parser;
@@ -18,7 +17,7 @@ use miette::{Diagnostic, IntoDiagnostic, NamedSource, Result, SourceSpan, WrapEr
 use thiserror::Error;
 
 use crate::lexer::Lexer;
-use crate::lowerer::{Lowerer, SourceMap, SymbolTable};
+use crate::lowerer::{SourceMap, SymbolTable, lower_modules};
 use crate::parser::Parser as PhotonParser;
 mod ast;
 mod errors;
@@ -41,7 +40,7 @@ struct Cli {
 }
 
 /// An error tied to a span in a source file
-/// 
+///
 /// We then pass this to miette for fancy printing
 #[derive(Debug, Error, Diagnostic)]
 #[error("failed to {stage} {file}")]
@@ -50,8 +49,10 @@ struct SourceError {
     stage: &'static str,
     file: String,
     message: String,
+
     #[source_code]
     src: NamedSource<String>,
+
     #[label("{message}")]
     span: SourceSpan,
 }
@@ -83,9 +84,9 @@ fn main() -> Result<()> {
     let output_dir = &cli.output_dir;
 
     let mut modules = Vec::new();
-    
-    // namespace -> (source map, file name, source text)
-    let mut sources = HashMap::new();
+
+    // (source map, file name, source text), in the same order as modules.
+    let mut sources = Vec::new();
 
     // Read source files
     for source_file in input_paths {
@@ -107,7 +108,7 @@ fn main() -> Result<()> {
             .parse_module()
             .map_err(|e| SourceError::new("parse", &file_name, &source, e.to_string(), e.span))?;
 
-        sources.insert(ast.namespace.clone(), (source_map, file_name, source));
+        sources.push((source_map, file_name, source));
         modules.push(ast);
     }
 
@@ -115,13 +116,21 @@ fn main() -> Result<()> {
     let symbol_table = SymbolTable::collect_all_symbols_from_modules(&modules)
         .map_err(|e| miette!("failed to collect symbols: {e}"))?;
 
-    for module in modules {
-        let (source_map, file_name, source) = &sources[&module.namespace];
+    // Get every pasred module and its source map for the lowering pass.
+    let inputs: Vec<_> = modules
+        .iter()
+        .zip(&sources)
+        .map(|(module, (source_map, _, _))| (module, source_map))
+        .collect();
 
-        let lowered = Lowerer::new(&symbol_table, source_map, &module)
-            .lower_to_string()
-            .map_err(|e| SourceError::new("lower", file_name, source, e.to_string(), e.span))?;
+    // Lower all the modules
+    let lowered_modules = lower_modules(&symbol_table, &inputs).map_err(|(module_index, e)| {
+        let (_, file_name, source) = &sources[module_index];
+        SourceError::new("lower", file_name, source, e.to_string(), e.span)
+    })?;
 
+    // Outputs follow input order in `inputs`.
+    for (module, lowered) in modules.iter().zip(lowered_modules) {
         let mut output_path = output_dir.clone();
 
         // Write output file
