@@ -267,7 +267,7 @@ impl Linker {
         for (line_number, line) in file.file_contents.lines().enumerate() {
             let line_number = match current_sloc_line {
                 None => line_number + 1,
-                Some(sloc_line_num) => sloc_line_num
+                Some(sloc_line_num) => sloc_line_num,
             };
 
             // Strip the comment from a line and ignore if empty, this means
@@ -380,7 +380,7 @@ impl Linker {
                     }
 
                     // object remapping
-                    [op @ ("object.new" | "onw"), object] => {
+                    [op @ ("object.new" | "onw" | "@push.object" | "object.type.tag"), object] => {
                         // Do not overwrite macro params!
                         if let Some(params) = &macro_params
                             && params.iter().any(|param| param == object)
@@ -389,21 +389,27 @@ impl Linker {
                             continue;
                         }
 
-                        let new_object_name = match object_map.get(*object).ok_or_else(|| {
-                            LinkerErrorKind::UndefinedName {
-                                name: object.to_string(),
-                            }
-                            .with_line(line_number, file.full_file_name.clone())
-                        }) {
-                            Ok(name) => name,
-                            Err(error) => {
-                                if valid_symbols.contains(*object) {
-                                    *object
-                                } else {
-                                    errors.push(error);
-                                    continue;
+                        // @raw is passthrough to quark3
+                        let new_object_name = if object != &"@raw" {
+                            // not @raw, resolve actual object name
+                            match object_map.get(*object).ok_or_else(|| {
+                                LinkerErrorKind::UndefinedName {
+                                    name: object.to_string(),
+                                }
+                                .with_line(line_number, file.full_file_name.clone())
+                            }) {
+                                Ok(name) => name,
+                                Err(error) => {
+                                    if valid_symbols.contains(*object) {
+                                        *object
+                                    } else {
+                                        errors.push(error);
+                                        continue;
+                                    }
                                 }
                             }
+                        } else {
+                            "@raw"
                         };
 
                         push_source_aware(
@@ -436,21 +442,27 @@ impl Linker {
                         let object_name = split_access[0];
                         let field = split_access[1];
 
-                        let new_object_name = match object_map.get(object_name).ok_or_else(|| {
-                            LinkerErrorKind::UndefinedName {
-                                name: object_name.to_string(),
-                            }
-                            .with_line(line_number, file.full_file_name.clone())
-                        }) {
-                            Ok(name) => name,
-                            Err(error) => {
-                                if valid_symbols.contains(object_name) {
-                                    object_name
-                                } else {
-                                    errors.push(error);
-                                    continue;
+                        // @raw is passthrough to quark3
+                        let new_object_name = if object != &"@raw" {
+                            // not @raw, resolve actual object name
+                            match object_map.get(object_name).ok_or_else(|| {
+                                LinkerErrorKind::UndefinedName {
+                                    name: object_name.to_string(),
+                                }
+                                .with_line(line_number, file.full_file_name.clone())
+                            }) {
+                                Ok(name) => name,
+                                Err(error) => {
+                                    if valid_symbols.contains(object_name) {
+                                        object_name
+                                    } else {
+                                        errors.push(error);
+                                        continue;
+                                    }
                                 }
                             }
+                        } else {
+                            "@raw"
                         };
 
                         push_source_aware(
@@ -463,7 +475,7 @@ impl Linker {
                     }
 
                     // function remapping
-                    [op @ ("call" | "cal" | "tail.call" | "tcl"), function] => {
+                    [op @ ("call" | "cal" | "tail.call" | "tcl" | "@push.fn"), function] => {
                         // Do not overwrite macro params!
                         if let Some(params) = &macro_params
                             && params.iter().any(|param: &String| param == function)
@@ -472,21 +484,27 @@ impl Linker {
                             continue;
                         }
 
-                        let new_function_name = match function_map.get(*function).ok_or_else(|| {
-                            LinkerErrorKind::UndefinedName {
-                                name: function.to_string(),
-                            }
-                            .with_line(line_number, file.full_file_name.clone())
-                        }) {
-                            Ok(name) => name,
-                            Err(error) => {
-                                if valid_symbols.contains(*function) {
-                                    *function
-                                } else {
-                                    errors.push(error);
-                                    continue;
+                        // @raw is passthrough to quark3
+                        let new_function_name = if function != &"@raw" {
+                            // not @raw, lookup map
+                            match function_map.get(*function).ok_or_else(|| {
+                                LinkerErrorKind::UndefinedName {
+                                    name: function.to_string(),
+                                }
+                                .with_line(line_number, file.full_file_name.clone())
+                            }) {
+                                Ok(name) => name,
+                                Err(error) => {
+                                    if valid_symbols.contains(*function) {
+                                        *function
+                                    } else {
+                                        errors.push(error);
+                                        continue;
+                                    }
                                 }
                             }
+                        } else {
+                            "@raw"
                         };
 
                         push_source_aware(
@@ -582,7 +600,7 @@ impl Linker {
                         other.join(" "),
                         line_number,
                         &mut output,
-                        has_source_locs
+                        has_source_locs,
                     ),
                 }
             }
