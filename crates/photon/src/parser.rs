@@ -401,6 +401,9 @@ impl<'tokens> Parser<'tokens> {
     fn parse_global(&mut self) -> PhotonResult<Located<TopLevelItem>> {
         let start = self.expect_directive("global")?.start;
 
+        // optional constant declaration
+        let is_const = self.eat(&TokenKind::Const);
+
         // global name
         let name = self.expect_identifier()?;
 
@@ -408,12 +411,22 @@ impl<'tokens> Parser<'tokens> {
 
         // global type
         let declared_type = self.parse_type()?;
+
+        // optional binding
+        let initialiser = if self.eat(&TokenKind::Assign) {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
         let end = self.previous_span().end;
 
         let item = Located::new(
             TopLevelItem::Global(GlobalDeclaration {
                 name,
                 declared_type,
+                is_const,
+                initialiser,
             }),
             (start..end).into(),
         );

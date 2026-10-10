@@ -8,6 +8,7 @@
 //! - resolving types (simply)
 //! - resolving whether things produce values or not and handling void appropriately with drop
 
+use petgraph::{algo::{astar, toposort}, graph::DiGraph};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
@@ -93,7 +94,7 @@ struct FunctionContext {
 pub struct SymbolTable {
     functions: HashMap<QualifiedName, FunctionSignature>,
     objects: HashMap<QualifiedName, ObjectSignature>,
-    globals: HashMap<QualifiedName, TypeName>,
+    globals: HashMap<QualifiedName, GlobalSignature>,
 }
 
 /// An output source location which can be accepted by the gluon3 linker
@@ -130,6 +131,13 @@ pub struct ObjectSignature {
     pub fields: Vec<(String, TypeName)>,
 }
 
+/// One defined global in the symbol table that can be referred to
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalSignature {
+    pub global_type: TypeName,
+    pub is_const: bool,
+}
+
 /// The actual lowerer itself, this is responsible
 /// for handling the lowering from the produced `ast` to
 /// boson3 source code with std.b3 included.
@@ -146,6 +154,58 @@ pub struct Lowerer<'symbols, 'source_map, 'module, 'monomorphs> {
     // Because we may discover new monomorphisations to make we need to hold
     // a mutable reference to this
     monomorphisations: &'monomorphs mut Monomorphisations,
+
+    /// These are all the dependencies observed during the current lowering operation
+    /// which we need to track to prevent cyclic global intialisation etc.
+    dependencies: LoweringDependencies,
+
+    /// These are the dependencies of all functions's specific instances
+    function_dependencies: HashMap<QualifiedName, LoweringDependencies>,
+}
+
+/// All dependencies referred to regarding calls to functions & global reads
+/// during the lowering process.
+#[derive(Debug, Clone, Default)]
+struct LoweringDependencies {
+    global_reads: HashSet<QualifiedName>,
+    calls: HashSet<QualifiedName>,
+}
+
+/// A fully lowered global initialiser together with its dependencies
+///
+/// The initialiser is lowered in the defining module so the names are
+/// valid for that module.
+#[derive(Debug)]
+struct GlobalInitialisation {
+    /// same as monomorph spsecialisations
+    module_index: usize,
+
+    /// Qualified full name of the global we are initialising
+    name: QualifiedName,
+
+    /// Source span of the initial declaration & code to actually init it
+    span: SourceSpan,
+    code: String,
+
+    // Deps to prevent cycles and also to topological order
+    dependencies: LoweringDependencies,
+}
+
+/// The  @entry declaration in a module.
+///
+/// The real emitted entry is generated later, which
+/// we actually use to call the global initialiser which
+/// then calls our original user entry.
+///
+/// There can only be one.
+#[derive(Debug)]
+struct UserEntry {
+    // which module the real entry is in
+    module_index: usize,
+
+    // the full name of the entry function
+    name: QualifiedName,
+    span: SourceSpan,
 }
 
 /// One registered function instance in the work list of the lowerer coordinator.
@@ -343,10 +403,13 @@ impl Monomorphisations {
 /// We need to lower them all together because we need to consider monomorphisations
 /// across modules.
 ///
+/// This also handles all global resolution across all modules as part of a setup function
+/// which calls individual global setups.
+///
 /// # Errors
 ///
 /// This will error in many ways, for example if lowering fails on one module, or
-/// if monomorphisations have an issue etc.
+/// if monomorphisations have an issue, or globals have a cyclic reference etc.
 ///
 /// See `PhotonError` for specific lowering errors.
 ///
@@ -361,36 +424,141 @@ pub fn lower_modules(
 
     // And full output for each module
     let mut outputs = Vec::with_capacity(inputs.len());
+    let mut user_entry: Option<UserEntry> = None;
+
+    // All dependencies of all functions
+    //
+    // The name here is of the concrete instance
+    let mut function_dependencies = HashMap::new();
 
     // Lower each module initially
     //
     // this will basically register eacah monomorphisation specialisation into
     // `pending` in `monomorphisations`
+
     for (index, &(module, source_map)) in inputs.iter().enumerate() {
+        // See if this module contains our actual concrete @entry for the full program
+        for item in &module.items {
+            let TopLevelItem::Entry(function) = &item.value else {
+                continue;
+            };
+
+            // Get its signature from the name
+            let name = QualifiedName::from_text(function).resolve(&module.namespace);
+            let signature = symbols.function(&name).ok_or_else(|| {
+                (
+                    index,
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::UnknownFunction { name: name.clone() },
+                        item.span,
+                    ),
+                )
+            })?;
+
+            // We dont permit generic functions as the entry,
+            // because what are the actual type args we would pass??
+            if !signature.type_parameters.is_empty() {
+                return Err((
+                    index,
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::EntryGenericFunction { name },
+                        item.span,
+                    ),
+                ));
+            }
+
+            // Must have exactly 0 parameters, else what the hell
+            // concrete args do we pass
+            if !signature.parameters.is_empty() {
+                return Err((
+                    index,
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::NumArgumentCallMismatch {
+                            expected: 0,
+                            found: signature.parameters.len(),
+                        },
+                        item.span,
+                    ),
+                ));
+            }
+
+            // And we can only ever have one entry across all modules, else kaboom
+            if let Some(previous) = &user_entry {
+                return Err((
+                    index,
+                    PhotonErrorKind::error(
+                        PhotonErrorKind::UnexpectedMultipleEntry {
+                            first: previous.name.clone(),
+                            second: name,
+                        },
+                        item.span,
+                    ),
+                ));
+            }
+
+            user_entry = Some(UserEntry {
+                module_index: index,
+                name,
+                span: item.span,
+            });
+        }
+
         let mut lowerer = Lowerer::new(symbols, source_map, module, &mut monomorphisations);
-        outputs.push(
-            lowerer
-                .lower_module_items()
-                .map_err(|error| (index, error))?,
-        );
+        let output = lowerer
+            .lower_module_items()
+            .map_err(|error| (index, error))?;
+
+        // add all deps of all functions of this module to the global set
+        function_dependencies.extend(std::mem::take(&mut lowerer.function_dependencies));
+        outputs.push(output);
     }
 
-    // recursively keep resolving all of the specialisations in monomorphisations until
-    // we are done with all monomorph instance generation
-    loop {
-        // get next instance to resolve, otherwise we are done
-        let instance = monomorphisations.pending.pop();
-        let Some(instance) = instance else { 
-            break 
-        };
+    // Execute the lowerer over all globals, we do this to record the dependency of all globals
+    // and get the code to initialise them, we cant just directly insert all of them here
+    // because we need to consider the ordering of initialisations
+    let mut initialisations = Vec::new();
 
+    for (module_index, &(module, source_map)) in inputs.iter().enumerate() {
+        let mut lowerer = Lowerer::new(symbols, source_map, module, &mut monomorphisations);
+
+        // Execute specifically globals
+        for item in &module.items {
+            let TopLevelItem::Global(global) = &item.value else {
+                continue;
+            };
+
+            // if no initialisers then ignore
+            let name = QualifiedName::from_text(&global.name).qualify_from(&module.namespace);
+            let Some(initialiser) = &global.initialiser else {
+                continue;
+            };
+
+            // get the code to initialise this global and all of its dependencies
+            let (code, dependencies) = lowerer
+                .lower_global_initialiser(&name, &initialiser)
+                .map_err(|error| (module_index, error))?;
+
+            initialisations.push(GlobalInitialisation {
+                module_index,
+                name,
+                span: item.span,
+                code,
+                dependencies,
+            });
+        }
+    }
+
+    // Resolve function templates found by normal function and globals
+    while let Some(instance) = monomorphisations.pending.pop() {
         // get the specific module and source map this specialisation belongs to
         let (module, source_map) = inputs[instance.module_index];
 
         // get the actual function
         let item = &module.items[instance.item_index];
         let TopLevelItem::Function(function) = &item.value else {
-            unreachable!("only function declarations are registered as templates by `register` and during lowering bleh");
+            unreachable!(
+                "only function declarations are registered as templates by `register` and during lowering bleh"
+            );
         };
 
         // the specific type arguments to use during this specialisation for all the type parameters
@@ -401,12 +569,14 @@ pub fn lower_modules(
             .zip(instance.type_arguments)
             .collect();
 
-
         // lower this specific function with these specific type arguments
         let mut lowerer = Lowerer::new(symbols, source_map, module, &mut monomorphisations);
         let code = lowerer
             .lower_function(function, instance.name.last(), substitution)
             .map_err(|error| (instance.module_index, error))?;
+
+        // output all the dependencies of this function into the global deps for all modules
+        function_dependencies.extend(std::mem::take(&mut lowerer.function_dependencies));
 
         // add to the output for this specific module
         let output = &mut outputs[instance.module_index].contents;
@@ -414,7 +584,212 @@ pub fn lower_modules(
         output.push_str(&lowerer.with_source_location(item.span, code));
     }
 
+    // Expand the dependencies of each global such that we can look up what
+    // dependencies fully of an initialisation[i] at dependencies[i],
+    //
+    // this takes into account all the functions that are called by the global's
+    // initialiser
+    let dependencies: Vec<HashSet<QualifiedName>> = initialisations
+        .iter()
+        .map(|init| expand_global_reads(&init.dependencies, &function_dependencies))
+        .collect();
+
+    // topologically sort all of the globals so we initialise them all in the correct order
+    let order = sort_global_initialisations(&initialisations, &dependencies)?;
+
+    // Emit one helper per global in its defining module responsible
+    // for initialising the global
+    let mut init_functions = Vec::with_capacity(initialisations.len());
+    for init in &initialisations {
+
+        // the specific module we are going to put this initialisation in
+        let (module, source_map) = inputs[init.module_index];
+
+        // make sure it doesn't conflict with any names in the set of reserved names too similar
+        // to monomorph instances
+        let helper_name = loop {
+            let local_name = format!("__photon3_global_init_{}", monomorphisations.next_name);
+            monomorphisations.next_name += 1;
+
+            let qualified = QualifiedName::from_text(&local_name).qualify_from(&module.namespace);
+            if monomorphisations.reserved_names.insert(qualified.clone()) {
+                break (local_name, qualified);
+            }
+        };
+
+        
+        let location = source_map.span_start(init.span);
+        let output = &mut outputs[init.module_index].contents;
+        
+        // initialisation function
+        output.push_str(&format!(
+            "\n@source_loc {} {}\n@fn {} ()\n{}\n!std::return_void",
+            location.line, location.column, helper_name.0, init.code,
+        ));
+        init_functions.push(helper_name.1);
+    }
+
+    // Emit the photon special function for initialisation, which will eventually
+    // call the real user initialisation function
+    if let Some(entry) = user_entry {
+        // the real module where the entry is 
+        let (module, source_map) = inputs[entry.module_index];
+
+        // no conflicts
+        let generated_name = loop {
+            let local_name = format!("__photon3_setup_{}", monomorphisations.next_name);
+            monomorphisations.next_name += 1;
+
+            let qualified = QualifiedName::from_text(&local_name).qualify_from(&module.namespace);
+            if monomorphisations.reserved_names.insert(qualified) {
+                break local_name;
+            }
+        };
+
+        // body of the setup function
+        let mut body = Vec::with_capacity(order.len() + 3);
+        body.push(format!("@fn {generated_name} ()"));
+
+        // we call all of the global setup functions
+        for index in order {
+            body.push(format!("!std::call {} ( {{}} )", init_functions[index]));
+        }
+
+        // and then the actual setup function
+        let signature = symbols.function(&entry.name).expect("entry was validated");
+
+        // nothing gets actually returned from the main function, normalise
+        let call = format!("!std::call {} ( {{}} )", entry.name);
+        body.push(if signature.return_type == TypeName::Void {
+            call
+        } else {
+            format!("!std::drop {}", block(&call))
+        });
+
+        body.push("!std::return_void".to_string());
+
+        let entry_location = source_map.span_start(entry.span);
+        let output = &mut outputs[entry.module_index].contents;
+        output.push_str(&format!(
+            "\n@source_loc {} {}\n{}\n@entry {}",
+            entry_location.line,
+            entry_location.column,
+            body.join("\n"),
+            generated_name,
+        ));
+    }
+
     Ok(outputs)
+}
+
+/// Expand the direct reads of a global initialiser through all reachable functions
+/// by that global initialiser.
+///
+/// Essentially we output the full set of all referred to globals by this initial
+/// set of dependencies, as that set of dependencies refers to some functions, which
+/// we know what globals they refer to.
+fn expand_global_reads(
+    initial: &LoweringDependencies,
+    functions: &HashMap<QualifiedName, LoweringDependencies>,
+) -> HashSet<QualifiedName> {
+    // All of the global reads we start with are the ones already known.
+    let mut reads = initial.global_reads.clone();
+
+    // And a work-set for all the functions called by the initialiser which
+    // we look up in functions.
+    let mut pending: Vec<QualifiedName> = initial.calls.iter().cloned().collect();
+
+    // Dont-revisit a function we already visited else we get infinite recursion issues
+    let mut visited = HashSet::new();
+
+    while let Some(function) = pending.pop() {
+        if !visited.insert(function.clone()) {
+            continue;
+        }
+
+        // And extend all of the reads with the deps of this function
+        if let Some(dependencies) = functions.get(&function) {
+            reads.extend(dependencies.global_reads.iter().cloned());
+            pending.extend(dependencies.calls.iter().cloned());
+        }
+    }
+    reads
+}
+
+/// Return global indices in a topological order.
+///
+/// Essentially each global initialisation `initialisations` with its corresponding
+/// dependency at the same index in dependencies
+fn sort_global_initialisations(
+    initialisations: &[GlobalInitialisation],
+    dependencies: &[HashSet<QualifiedName>],
+) -> Result<Vec<usize>, (usize, PhotonError)> {
+    // Make a graph of all of the nodes by their index into initialisations,
+    // we have no data type for the edges
+    let mut graph = DiGraph::<usize, ()>::new();
+
+    // Add all of the initialisations as a node to the graph
+    let nodes: Vec<_> = (0..initialisations.len())
+        .map(|index| graph.add_node(index))
+        .collect();
+
+    // mapping from the name of the node to its index in the graph.
+    let indices: HashMap<QualifiedName, usize> = initialisations
+        .iter()
+        .enumerate()
+        .map(|(index, init)| (init.name.clone(), index))
+        .collect();
+
+    
+    // add all of the dependencies as edges for topo sorting on this graph
+    for (dependent, requirements) in dependencies.iter().enumerate() {
+        // order all of the prerequisites of this node so we have a stable iteration order
+        let mut prerequisites: Vec<usize> = requirements
+            .iter()
+            .filter_map(|name| indices.get(name).copied())
+            .collect();
+        prerequisites.sort_unstable();
+        prerequisites.dedup();
+
+        // add edge from the preqreq -> dependent
+        for prerequisite in prerequisites {
+            graph.add_edge(nodes[prerequisite], nodes[dependent], ());
+        }
+    }
+
+    // topologically sort all of the graph
+    let order = toposort(&graph, None).map_err(|error| {
+
+        // the error should be one a node  is a cycle
+        let start = error.node_id();
+        let cycle_nodes = graph
+            .neighbors(start)
+            .find_map(|next| {
+                astar(&graph, next, |node| node == start, |_| 1usize, |_| 0usize)
+                    .map(|(_, mut path)| {
+                        path.insert(0, start);
+                        path
+                    })
+            })
+            .expect("petgraph returned a node participating in a cycle");
+
+        // actual name of the nodes in the cycle
+        let cycle: Vec<QualifiedName> = cycle_nodes
+            .iter()
+            .map(|&node| initialisations[graph[node]].name.clone())
+            .collect();
+
+        // get the module that the start of the cycle is in
+        // as the root module for the error of having a cycle
+        let init = &initialisations[graph[start]];
+        (
+            init.module_index,
+            PhotonErrorKind::error(PhotonErrorKind::GlobalInitialisationCycle { cycle }, init.span),
+        )
+    })?;
+
+    // else we have an actual order of the global initialisations
+    Ok(order.into_iter().map(|node| graph[node]).collect())
 }
 
 impl LoweredExpression {
@@ -812,7 +1187,17 @@ impl SymbolTable {
                         let declared_type = global.declared_type.canonicalise(namespace);
 
                         // duplicate global!
-                        if table.globals.insert(name.clone(), declared_type).is_some() {
+                        if table
+                            .globals
+                            .insert(
+                                name.clone(),
+                                GlobalSignature {
+                                    global_type: declared_type,
+                                    is_const: global.is_const,
+                                },
+                            )
+                            .is_some()
+                        {
                             return Err(PhotonErrorKind::error(
                                 PhotonErrorKind::DuplicateGlobal { name },
                                 item.span,
@@ -841,7 +1226,7 @@ impl SymbolTable {
 
     /// Attempts to resolve a global from it's qualfied name in the
     /// symbol table.
-    pub fn global(&self, name: &QualifiedName) -> Option<&TypeName> {
+    pub fn global(&self, name: &QualifiedName) -> Option<&GlobalSignature> {
         self.globals.get(name)
     }
 
@@ -963,6 +1348,8 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             source_map,
             module,
             monomorphisations,
+            dependencies: LoweringDependencies::default(),
+            function_dependencies: HashMap::new(),
         }
     }
 
@@ -991,23 +1378,9 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             // namespace guaranteed to be uniq alr due to parser
             TopLevelItem::Namespace(namespace) => format!("@namespace {namespace}"),
             TopLevelItem::Requires(namespace) => format!("@requires {namespace}"),
-            TopLevelItem::Entry(function) => {
-                // Make sure the entry function is not a genereic function/has no type parameters.
-                // else bad things will happen.
-                let name = QualifiedName::from_text(function).resolve(&self.module.namespace);
-                if self
-                    .symbols
-                    .function(&name)
-                    .is_some_and(|signature| !signature.type_parameters.is_empty())
-                {
-                    return Err(PhotonErrorKind::error(
-                        PhotonErrorKind::EntryGenericFunction { name },
-                        item.span,
-                    ));
-                }
-
-                format!("@entry {function}")
-            }
+            // We don't actually handle entries for a specific module,
+            // as the global intialiser is the true "entrypoint" which calls this
+            TopLevelItem::Entry(_) => return Ok(String::new()),
             TopLevelItem::Capability(capability) => {
                 format!("@capability {} {}", capability.name, capability.number)
             }
@@ -1035,6 +1408,50 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         Ok(self.with_source_location(item.span, code))
     }
 
+    /// Lower a global initialiser
+    ///
+    /// This is for lowering all the globals at the beginning before we execute
+    /// the real user code from their entry point.
+    ///
+    /// We can also assign to constant globals here (as they wont be changed during
+    /// execution, only in this setup phase)
+    ///
+    /// This returns all of the dependencies of this global while it was being lowered.
+    fn lower_global_initialiser(
+        &mut self,
+        name: &QualifiedName,
+        initialiser: &Located<Expression>,
+    ) -> PhotonResult<(String, LoweringDependencies)> {
+        // Create a new dependencies to hold all this global specific ones
+        self.dependencies = LoweringDependencies::default();
+
+        // We are essentially executing each global in its own context,
+        // as there are no locals available here (and any temps are evil)
+        let declared_type = self
+            .symbols
+            .global(name)
+            .expect("global was collected")
+            .global_type
+            .clone();
+        let context = FunctionContext {
+            locals: HashMap::new(),
+            substitution: TypeSubstitutionMap::new(),
+            ret_type: TypeName::Void,
+        };
+
+        // The lowered type of the initialiser should match the global type
+        let lowered = self.expect_lowered_expression_type(
+            initialiser,
+            &declared_type,
+            &context,
+            TypeMismatchSource::GlobalInitialiser,
+        )?;
+
+        // get all the deps of this global and set its value to whatever the initialiser was
+        let code = format!("!std::global_set {name} = {}", block(&lowered.code));
+        Ok((code, std::mem::take(&mut self.dependencies)))
+    }
+
     /// Lowers one function down into it's string code version.
     ///
     /// `emitted_name` should be the actual concrete emitted name of
@@ -1047,6 +1464,9 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         emitted_name: &str,
         substitution: TypeSubstitutionMap,
     ) -> PhotonResult<String> {
+        // Each function has its own dependency graph for globals
+        self.dependencies = LoweringDependencies::default();
+
         // Create a function context, this is mapping of all the locals to
         // their expected types and the ret type which we pass to all sub-statements
         // of this function for type validation
@@ -1086,6 +1506,13 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         for statement in &function.body {
             output.push(self.lower_statement(statement, &mut context)?);
         }
+
+        // The dependencies of this function are whatever was put in our dependencies
+        // while lowering it (this clears out deps for next function too.)
+        let qualified = QualifiedName::from_text(emitted_name).qualify_from(&self.module.namespace);
+
+        self.function_dependencies
+            .insert(qualified, std::mem::take(&mut self.dependencies));
 
         Ok(output.join("\n"))
     }
@@ -1420,7 +1847,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
 
                 // Not a local? try globals, else it doesn't exist
                 let global_name = name.resolve(&self.module.namespace);
-                let global_type = self.symbols.global(&global_name).ok_or_else(|| {
+                let global_sig = self.symbols.global(&global_name).ok_or_else(|| {
                     PhotonErrorKind::error(
                         PhotonErrorKind::UnknownAssignmentTarget {
                             name: name.to_string(),
@@ -1429,6 +1856,18 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                     )
                 })?;
 
+                // We cant assign to a constant global
+                if global_sig.is_const {
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::ConstantGlobalAssignment {
+                            name: global_name.clone(),
+                        },
+                        span,
+                    ));
+                }
+
+                // Assign to global with type
+                let global_type = &global_sig.global_type;
                 value.expect_type(span, global_type, TypeMismatchSource::AssignmentRHS)?;
 
                 return assignment_macro(
@@ -1443,7 +1882,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             // A qualified name/not quite direct, which we assume to be a global.
             Expression::Name(name) => {
                 let global_name = name.resolve(&self.module.namespace);
-                let global_type = self.symbols.global(&global_name).ok_or_else(|| {
+                let global_sig = self.symbols.global(&global_name).ok_or_else(|| {
                     PhotonErrorKind::error(
                         PhotonErrorKind::UnknownGlobal {
                             name: global_name.to_string(),
@@ -1451,6 +1890,24 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                         span,
                     )
                 })?;
+
+                if global_sig.is_const {
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::ConstantGlobalAssignment {
+                            name: global_name.clone(),
+                        },
+                        span,
+                    ));
+                }
+
+                // We read this global here (for compound assignment potentially etc.)
+                if operator != AssignmentOperator::Assign {
+                    self.dependencies.global_reads.insert(global_name.clone());
+                }
+
+                // Assign to global with type, ensuring rhs is the same type.
+                let global_type = &global_sig.global_type;
+                value.expect_type(span, global_type, TypeMismatchSource::AssignmentRHS)?;
 
                 return assignment_macro(
                     &value.code,
@@ -1932,6 +2389,8 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 .register(&signature.name, type_arguments, span)?
         };
 
+        // Whatever we were lowering depends on this function called.
+        self.dependencies.calls.insert(name.clone());
         Ok((name, return_type))
     }
 
@@ -2195,7 +2654,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     ///
     /// This essentially tries to just resolve the name.
     fn lower_name_expr(
-        &self,
+        &mut self,
         name: &QualifiedName,
         span: SourceSpan,
         context: &FunctionContext,
@@ -2217,10 +2676,15 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
 
         // isnt a local or unit, try map global.
         let global_name = name.resolve(&self.module.namespace);
-        if let Some(global_type) = self.symbols.global(&global_name) {
+        if let Some(global_sig) = self.symbols.global(&global_name) {
+            let global_type = global_sig.global_type.clone();
+
+            // Whatever we were lowering depends on this global, we need to track
+            // these for global initialisation.
+            self.dependencies.global_reads.insert(global_name.clone());
             return Ok(LoweredExpression::value(
                 format!("!std::global_get {global_name}"),
-                global_type.clone(),
+                global_type,
             ));
         }
 

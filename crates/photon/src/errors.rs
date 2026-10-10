@@ -66,6 +66,10 @@ pub enum PhotonErrorKind {
     /// was found here
     UnexpectedEndOfArrayElemsFollowingComma,
 
+    /// Global nodes when ordering in the lowerer formed a 
+    /// cycle in the graph of globals
+    GlobalInitialisationCycle { cycle: Vec<QualifiedName> },
+
     /// Unexpected directive in the current position
     UnexpectedDirective { found: String, expected: String },
 
@@ -75,6 +79,10 @@ pub enum PhotonErrorKind {
     /// A non expression token was found in the place of an
     /// expression
     UnexpectedNonExpression { found: TokenKind },
+
+    /// Unexpectedly found multiple @entry declarations across
+    /// modules!
+    UnexpectedMultipleEntry { first: QualifiedName, second: QualifiedName },
 
     /// A non-step operator was found to be in the place of
     /// a step operator
@@ -178,6 +186,9 @@ pub enum PhotonErrorKind {
 
     /// A name was attempted to be assigned to but it could not be found!
     UnknownAssignmentTarget { name: String },
+
+    /// Attempted to assign to a constant global!
+    ConstantGlobalAssignment { name: QualifiedName },
 
     /// A name was attempted to be an expression to but it could not be found!
     UnknownName { name: String },
@@ -579,6 +590,9 @@ impl Display for PhotonErrorKind {
             Self::UnknownLocal { name } => {
                 write!(f, "found reference to unknown local `{name}`")
             }
+            Self::ConstantGlobalAssignment { name } => {
+                write!(f, "found assignment to a constant global variable `{name}`. This is not allowed!")
+            }
             Self::UnknownAssignmentTarget { name } => {
                 write!(
                     f,
@@ -733,6 +747,13 @@ impl Display for PhotonErrorKind {
                     "when specialising `{function_name}` as a generic function, found an unresolved generic parameter `{parameter}`!"
                 )
             }
+            Self::UnexpectedMultipleEntry { first, second } => {
+                write!(f, "unexpected mulitple declarations of an @entry function across modules, found first `{first}` and then unexpected second `{second}`")
+            }
+            Self::GlobalInitialisationCycle { cycle } => {
+                let cycle_joined = cycle.iter().map(|node| node.to_string()).collect::<Vec<_>>().join(" -> ");
+                write!(f, "unexpected cycle in dependency graph of global initiallisations, cycle: `{cycle_joined}`")
+            }
         }
     }
 }
@@ -779,6 +800,9 @@ pub enum TypeMismatchSource {
 
     /// In the position of an initialiser of a local
     LetLocalInitialiser,
+
+    /// In the position of an initialiser of a global
+    GlobalInitialiser,
 
     /// In the position of an index for this source of this array indeinxg op
     ArrayIndex { source: Box<Self> },
@@ -893,6 +917,9 @@ impl Display for TypeMismatchSource {
             }
             TypeMismatchSource::LetLocalInitialiser => {
                 write!(f, "the initialiser of a local declaration")
+            }
+            TypeMismatchSource::GlobalInitialiser => {
+                write!(f, "the initialiser of a global declaration")
             }
             TypeMismatchSource::ArrayIndex { source } => {
                 write!(

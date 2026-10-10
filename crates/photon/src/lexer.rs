@@ -54,6 +54,7 @@ pub enum TokenKind {
     Loop,
     As,
     Break,
+    Const,
     Continue,
 
     // seperators
@@ -684,6 +685,7 @@ impl<'src> Lexer<'src> {
             "false" => TokenKind::BoolLiteral(false),
             "let" => TokenKind::Let,
             "return" => TokenKind::Return,
+            "const" => TokenKind::Const,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "while" => TokenKind::While,
@@ -921,6 +923,7 @@ impl TokenKind {
     fn symbol_name(&self) -> &'static str {
         match self {
             Self::Let => "let",
+            Self::Const => "const",
             Self::Return => "return",
             Self::If => "if",
             Self::Else => "else",

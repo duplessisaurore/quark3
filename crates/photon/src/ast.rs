@@ -130,11 +130,13 @@ pub struct CapabilityDeclaration {
 
 /// Declaration of a global with a type in a module
 ///
-/// this is @global name: type
+/// this is @global <const> name: type <= initialiser>
 #[derive(Debug, Clone, PartialEq)]
 pub struct GlobalDeclaration {
+    pub is_const: bool,
     pub name: String,
     pub declared_type: TypeName,
+    pub initialiser: Option<Located<Expression>>
 }
 
 /// Declaration of an object in a module
