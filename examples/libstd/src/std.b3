@@ -2748,6 +2748,18 @@
 %ok:
 @end
 
+// ## @macro std::no_return_found
+//
+// ### Description
+// Aborts execution, with a macro name of no_return_found
+// so the user can know
+//
+// Always enabled.
+//
+@macro no_return_found ()
+    abort
+@end
+
 // ## @fn std::int_min <a> <b>
 //
 // ### Description

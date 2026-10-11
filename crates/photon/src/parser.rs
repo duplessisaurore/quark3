@@ -1842,7 +1842,7 @@ impl<'tokens> Parser<'tokens> {
         &mut self,
         start: usize,
     ) -> PhotonResult<Located<Expression>> {
-         // parse the array elements set
+        // parse the array elements set
         let elements = if self.eat(&TokenKind::RightBracket) {
             Vec::new()
         } else {

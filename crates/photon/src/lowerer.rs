@@ -1507,6 +1507,9 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             output.push(self.lower_statement(statement, &mut context)?);
         }
 
+        // Just in case the user forgot
+        output.push(String::from("!std::no_return_found"));
+
         // The dependencies of this function are whatever was put in our dependencies
         // while lowering it (this clears out deps for next function too.)
         let qualified = QualifiedName::from_text(emitted_name).qualify_from(&self.module.namespace);
