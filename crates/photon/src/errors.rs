@@ -66,7 +66,7 @@ pub enum PhotonErrorKind {
     /// was found here
     UnexpectedEndOfArrayElemsFollowingComma,
 
-    /// Global nodes when ordering in the lowerer formed a 
+    /// Global nodes when ordering in the lowerer formed a
     /// cycle in the graph of globals
     GlobalInitialisationCycle { cycle: Vec<QualifiedName> },
 
@@ -82,7 +82,10 @@ pub enum PhotonErrorKind {
 
     /// Unexpectedly found multiple @entry declarations across
     /// modules!
-    UnexpectedMultipleEntry { first: QualifiedName, second: QualifiedName },
+    UnexpectedMultipleEntry {
+        first: QualifiedName,
+        second: QualifiedName,
+    },
 
     /// A non-step operator was found to be in the place of
     /// a step operator
@@ -591,7 +594,10 @@ impl Display for PhotonErrorKind {
                 write!(f, "found reference to unknown local `{name}`")
             }
             Self::ConstantGlobalAssignment { name } => {
-                write!(f, "found assignment to a constant global variable `{name}`. This is not allowed!")
+                write!(
+                    f,
+                    "found assignment to a constant global variable `{name}`. This is not allowed!"
+                )
             }
             Self::UnknownAssignmentTarget { name } => {
                 write!(
@@ -748,11 +754,21 @@ impl Display for PhotonErrorKind {
                 )
             }
             Self::UnexpectedMultipleEntry { first, second } => {
-                write!(f, "unexpected mulitple declarations of an @entry function across modules, found first `{first}` and then unexpected second `{second}`")
+                write!(
+                    f,
+                    "unexpected mulitple declarations of an @entry function across modules, found first `{first}` and then unexpected second `{second}`"
+                )
             }
             Self::GlobalInitialisationCycle { cycle } => {
-                let cycle_joined = cycle.iter().map(|node| node.to_string()).collect::<Vec<_>>().join(" -> ");
-                write!(f, "unexpected cycle in dependency graph of global initiallisations, cycle: `{cycle_joined}`")
+                let cycle_joined = cycle
+                    .iter()
+                    .map(|node| node.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" -> ");
+                write!(
+                    f,
+                    "unexpected cycle in dependency graph of global initiallisations, cycle: `{cycle_joined}`"
+                )
             }
         }
     }

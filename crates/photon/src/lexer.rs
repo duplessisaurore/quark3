@@ -819,10 +819,7 @@ impl<'src> Lexer<'src> {
 
     /// Consumes tokens which match predicate together into a String
     /// does not overreach
-    fn consume_while(
-        &mut self,
-        mut predicate: impl FnMut(char) -> bool,
-    ) -> String {
+    fn consume_while(&mut self, mut predicate: impl FnMut(char) -> bool) -> String {
         let mut text = String::new();
 
         while let Some(c) = self.peek_char() {

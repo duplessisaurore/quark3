@@ -8,7 +8,10 @@
 //! - resolving types (simply)
 //! - resolving whether things produce values or not and handling void appropriately with drop
 
-use petgraph::{algo::{astar, toposort}, graph::DiGraph};
+use petgraph::{
+    algo::{astar, toposort},
+    graph::DiGraph,
+};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
@@ -535,7 +538,7 @@ pub fn lower_modules(
 
             // get the code to initialise this global and all of its dependencies
             let (code, dependencies) = lowerer
-                .lower_global_initialiser(&name, &initialiser)
+                .lower_global_initialiser(&name, initialiser)
                 .map_err(|error| (module_index, error))?;
 
             initialisations.push(GlobalInitialisation {
@@ -601,7 +604,6 @@ pub fn lower_modules(
     // for initialising the global
     let mut init_functions = Vec::with_capacity(initialisations.len());
     for init in &initialisations {
-
         // the specific module we are going to put this initialisation in
         let (module, source_map) = inputs[init.module_index];
 
@@ -617,10 +619,9 @@ pub fn lower_modules(
             }
         };
 
-        
         let location = source_map.span_start(init.span);
         let output = &mut outputs[init.module_index].contents;
-        
+
         // initialisation function
         output.push_str(&format!(
             "\n@source_loc {} {}\n@fn {} ()\n{}\n!std::return_void",
@@ -632,7 +633,7 @@ pub fn lower_modules(
     // Emit the photon special function for initialisation, which will eventually
     // call the real user initialisation function
     if let Some(entry) = user_entry {
-        // the real module where the entry is 
+        // the real module where the entry is
         let (module, source_map) = inputs[entry.module_index];
 
         // no conflicts
@@ -740,7 +741,6 @@ fn sort_global_initialisations(
         .map(|(index, init)| (init.name.clone(), index))
         .collect();
 
-    
     // add all of the dependencies as edges for topo sorting on this graph
     for (dependent, requirements) in dependencies.iter().enumerate() {
         // order all of the prerequisites of this node so we have a stable iteration order
@@ -759,17 +759,17 @@ fn sort_global_initialisations(
 
     // topologically sort all of the graph
     let order = toposort(&graph, None).map_err(|error| {
-
         // the error should be one a node  is a cycle
         let start = error.node_id();
         let cycle_nodes = graph
             .neighbors(start)
             .find_map(|next| {
-                astar(&graph, next, |node| node == start, |_| 1usize, |_| 0usize)
-                    .map(|(_, mut path)| {
+                astar(&graph, next, |node| node == start, |_| 1usize, |_| 0usize).map(
+                    |(_, mut path)| {
                         path.insert(0, start);
                         path
-                    })
+                    },
+                )
             })
             .expect("petgraph returned a node participating in a cycle");
 
@@ -784,7 +784,10 @@ fn sort_global_initialisations(
         let init = &initialisations[graph[start]];
         (
             init.module_index,
-            PhotonErrorKind::error(PhotonErrorKind::GlobalInitialisationCycle { cycle }, init.span),
+            PhotonErrorKind::error(
+                PhotonErrorKind::GlobalInitialisationCycle { cycle },
+                init.span,
+            ),
         )
     })?;
 
@@ -900,10 +903,8 @@ impl ObjectSignature {
         span: SourceSpan,
     ) -> PhotonResult<TypeSubstitutionMap> {
         // If there are no type parameters to this object signature then we have an empty map
-        if self.type_parameters.is_empty() {
-            if instance_type.object_name() == Some(&self.name) {
-                return Ok(TypeSubstitutionMap::new());
-            }
+        if self.type_parameters.is_empty() && instance_type.object_name() == Some(&self.name) {
+            return Ok(TypeSubstitutionMap::new());
         }
 
         // We have type parameters so this instance must be an Applied {}
@@ -1569,7 +1570,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     /// Lowers one loop statement down into source code
     fn lower_loop_statement(
         &mut self,
-        body: &Vec<Located<Statement>>,
+        body: &[Located<Statement>],
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
         let body = self.lower_statement_block(body, context)?;
@@ -1579,7 +1580,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     /// Lowers a statement block down into source code (a block is essentially just a Vec<Statement>)
     fn lower_statement_block(
         &mut self,
-        block: &Vec<Located<Statement>>,
+        block: &[Located<Statement>],
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
         block
@@ -1595,7 +1596,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     /// lines to each body line of the boson3 source statement, because
     /// else it'd be difficult to map back into where in the src code,
     /// even though its already textualised
-    fn lower_boson3_statement(&self, body: &String, body_span: SourceSpan) -> PhotonResult<String> {
+    fn lower_boson3_statement(&self, body: &str, body_span: SourceSpan) -> PhotonResult<String> {
         // Total output of this boson3 lowering
         let mut output = Vec::new();
 
@@ -1635,7 +1636,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         span: SourceSpan,
         binding: &Parameter,
         array: &Located<Expression>,
-        body: &Vec<Located<Statement>>,
+        body: &[Located<Statement>],
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
         // for elem in array
@@ -1676,8 +1677,8 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         &mut self,
         initialiser: &Option<Located<SimpleStatement>>,
         condition: &Located<Expression>,
-        step: &Box<Option<Located<SimpleStatement>>>,
-        body: &Vec<Located<Statement>>,
+        step: &Option<Located<SimpleStatement>>,
+        body: &[Located<Statement>],
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
         // initialiser
@@ -1719,7 +1720,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     /// Lowers a dowhile statement in the current function context,
     fn lower_dowhile_statement(
         &mut self,
-        body: &Vec<Located<Statement>>,
+        body: &[Located<Statement>],
         condition: &Located<Expression>,
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
@@ -1745,7 +1746,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     fn lower_while_statement(
         &mut self,
         condition: &Located<Expression>,
-        body: &Vec<Located<Statement>>,
+        body: &[Located<Statement>],
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
         // condition should be of type bool
@@ -1840,7 +1841,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
 
                     return assignment_macro(
                         &value.code,
-                        &name.last().to_string(),
+                        name.last(),
                         local_type,
                         AssignmentTarget::Local,
                         operator,
@@ -1873,14 +1874,14 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 let global_type = &global_sig.global_type;
                 value.expect_type(span, global_type, TypeMismatchSource::AssignmentRHS)?;
 
-                return assignment_macro(
+                assignment_macro(
                     &value.code,
                     &global_name.to_string(),
                     global_type,
                     AssignmentTarget::Global,
                     operator,
                     span,
-                );
+                )
             }
             // A qualified name/not quite direct, which we assume to be a global.
             Expression::Name(name) => {
@@ -1912,14 +1913,14 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 let global_type = &global_sig.global_type;
                 value.expect_type(span, global_type, TypeMismatchSource::AssignmentRHS)?;
 
-                return assignment_macro(
+                assignment_macro(
                     &value.code,
                     &global_name.to_string(),
                     global_type,
                     AssignmentTarget::Global,
                     operator,
                     span,
-                );
+                )
             }
 
             // field access, assignment to an object.
@@ -1957,7 +1958,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 // ensure value matches field type
                 value.expect_type(span, &field_type, TypeMismatchSource::AssignmentRHS)?;
 
-                return assignment_macro(
+                assignment_macro(
                     &value.code,
                     &receiver.code,
                     &field_type,
@@ -1967,7 +1968,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                     },
                     operator,
                     span,
-                );
+                )
             }
 
             // Assignment to an array at an index
@@ -2008,7 +2009,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                     .cloned()
                     .unwrap_or_else(|| value.value_type.clone());
 
-                return assignment_macro(
+                assignment_macro(
                     &value.code,
                     &array.code,
                     &assignment_type,
@@ -2017,7 +2018,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                     },
                     operator,
                     span,
-                );
+                )
             }
             _ => Err(PhotonErrorKind::error(
                 PhotonErrorKind::InvalidAssignmentTarget,
@@ -2099,7 +2100,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     fn lower_if_statement(
         &mut self,
         condition: &Located<Expression>,
-        then_body: &Vec<Located<Statement>>,
+        then_body: &[Located<Statement>],
         else_body: &Option<Vec<Located<Statement>>>,
         context: &mut FunctionContext,
     ) -> PhotonResult<String> {
@@ -2732,8 +2733,8 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     /// Lowers one array index access expression in the current context of a function
     fn lower_array_index_expr(
         &mut self,
-        array: &Box<Located<Expression>>,
-        index: &Box<Located<Expression>>,
+        array: &Located<Expression>,
+        index: &Located<Expression>,
         context: &FunctionContext,
     ) -> PhotonResult<LoweredExpression> {
         // lower array and index down
@@ -2760,9 +2761,9 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     /// Lowers one conditional  expression in the current context of a function
     fn lower_conditional_expr(
         &mut self,
-        condition: &Box<Located<Expression>>,
-        when_true: &Box<Located<Expression>>,
-        when_false: &Box<Located<Expression>>,
+        condition: &Located<Expression>,
+        when_true: &Located<Expression>,
+        when_false: &Located<Expression>,
         context: &FunctionContext,
     ) -> PhotonResult<LoweredExpression> {
         // condition
@@ -2808,7 +2809,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     fn lower_unary_expr(
         &mut self,
         operator: UnaryOperator,
-        operand: &Box<Located<Expression>>,
+        operand: &Located<Expression>,
         span: SourceSpan,
         context: &FunctionContext,
     ) -> PhotonResult<LoweredExpression> {
@@ -2851,7 +2852,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     /// Lowers one array literal expression in the current context of a function
     fn lower_array_lit_expr(
         &mut self,
-        elements: &Vec<Located<Expression>>,
+        elements: &[Located<Expression>],
         context: &FunctionContext,
         expected_element_type: Option<&TypeName>,
     ) -> PhotonResult<LoweredExpression> {
@@ -3130,12 +3131,11 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
 
         // Check if it's a special array method, which uses internal methods
         // rather than calling a real method function
-        if matches!(method, MethodName::Inferred(_)) {
-            if let Some(array_method) =
+        if matches!(method, MethodName::Inferred(_))
+            && let Some(array_method) =
                 self.lower_array_method(&receiver, method, arguments, span, context)?
-            {
-                return Ok(array_method);
-            }
+        {
+            return Ok(array_method);
         }
 
         // Resolve the method name down to find the function signature
@@ -3574,8 +3574,8 @@ fn expect_argument_count(expected: usize, actual: usize, span: SourceSpan) -> Ph
 /// The `lhs` should be the thing we are assigning to.
 /// It is assumed to be valid.
 fn assignment_macro(
-    code: &String,
-    lhs: &String,
+    code: &str,
+    lhs: &str,
     value_type: &TypeName,
     target: AssignmentTarget,
     operator: AssignmentOperator,
@@ -3868,7 +3868,7 @@ fn expect_type_accepts(
             PhotonErrorKind::TypeMismatchSource {
                 expected: expected.clone(),
                 found: actual.clone(),
-                source: source,
+                source,
             },
             span,
         ));

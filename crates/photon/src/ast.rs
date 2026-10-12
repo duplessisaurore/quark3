@@ -79,7 +79,7 @@ pub enum TypeName {
 
 /// Substitution map, this maps all of the generic parameters
 /// in a type to it's concrete type to resolve to by name
-/// 
+///
 /// For ex. Queue<T>, TSMap<T = Int> will subsittute the queue to Queue<Int>
 pub type TypeSubstitutionMap = HashMap<String, TypeName>;
 
@@ -136,7 +136,7 @@ pub struct GlobalDeclaration {
     pub is_const: bool,
     pub name: String,
     pub declared_type: TypeName,
-    pub initialiser: Option<Located<Expression>>
+    pub initialiser: Option<Located<Expression>>,
 }
 
 /// Declaration of an object in a module
@@ -512,7 +512,6 @@ impl fmt::Display for QualifiedName {
     }
 }
 
-
 impl fmt::Display for TypeName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -535,7 +534,7 @@ impl fmt::Display for TypeName {
                 "{}<{}>",
                 constructor,
                 arguments
-                    .into_iter()
+                    .iter()
                     .map(TypeName::to_string)
                     .collect::<Vec<_>>()
                     .join(",")
@@ -572,16 +571,14 @@ impl TypeName {
             Self::Object(name) => Some(name),
 
             // the applied constructor can be an object too, etc. Queue<T>
-            Self::Applied { constructor, .. } => {
-                constructor.object_name()
-            }
+            Self::Applied { constructor, .. } => constructor.object_name(),
 
             _ => None,
         }
     }
 
     /// Constructs an applied type from this type constructor.
-    /// 
+    ///
     /// This essentially turns this type into ThisType<arguments...>
     pub fn applied(self, arguments: Vec<TypeName>) -> Self {
         Self::Applied {
@@ -603,7 +600,6 @@ impl TypeName {
             Self::Applied {
                 constructor,
                 arguments,
-                
                 // Array<T, T> is not an array...
             } => constructor.as_ref() == &Self::Array && arguments.len() == 1,
             _ => false,
@@ -617,9 +613,7 @@ impl TypeName {
             Self::Applied {
                 constructor,
                 arguments,
-            } if constructor.as_ref() == &Self::Array && arguments.len() == 1 => {
-                arguments.first()
-            }
+            } if constructor.as_ref() == &Self::Array && arguments.len() == 1 => arguments.first(),
             _ => None,
         }
     }
@@ -661,7 +655,7 @@ impl TypeName {
     /// with self as type
     pub fn normalise_to_drop(&self, code: &str) -> LoweredExpression {
         if *self == TypeName::Void {
-            LoweredExpression::no_value(format!("!std::drop {}", block(&code)))
+            LoweredExpression::no_value(format!("!std::drop {}", block(code)))
         } else {
             LoweredExpression::value(code, self.clone())
         }
@@ -677,12 +671,9 @@ impl TypeName {
 
     /// Uses a type substitution map to map all of the generic parameters
     /// of this current type in the substitution map to some other type recursively.
-    /// 
+    ///
     /// For ex. Queue<T> => Queue<Int>
-    pub fn substitute(
-        &self,
-        substitution: &TypeSubstitutionMap,
-    ) -> TypeName {
+    pub fn substitute(&self, substitution: &TypeSubstitutionMap) -> TypeName {
         match self {
             // We are mapping generic parameters direclty.
             TypeName::GenericParameter(name) => substitution
@@ -695,21 +686,17 @@ impl TypeName {
                 constructor,
                 arguments,
             } => TypeName::Applied {
-                constructor: Box::new(
-                    constructor.substitute(substitution)
-                ),
+                constructor: Box::new(constructor.substitute(substitution)),
                 arguments: arguments
                     .iter()
-                    .map(|argument| {
-                        argument.substitute(substitution)
-                    })
+                    .map(|argument| argument.substitute(substitution))
                     .collect(),
             },
 
             // No substitution needed here.
             other => other.clone(),
         }
-    }    
+    }
 
     /// Returns whether this type still contains an un-subsituted/resolved generic parameter.
     pub fn contains_generic_parameter(&self) -> bool {
@@ -725,7 +712,6 @@ impl TypeName {
             _ => false,
         }
     }
-
 }
 
 impl BinaryOperator {

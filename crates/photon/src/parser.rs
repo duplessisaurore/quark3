@@ -189,22 +189,20 @@ impl<'tokens> Parser<'tokens> {
             let item = self.parse_top_level_item()?;
 
             // Check item for potential conflicts/duplicates
-            match &item {
-                Located {
-                    value: TopLevelItem::Namespace(qualified_namespace),
-                    ..
-                } => {
-                    // duplicate namespace
-                    if namespace_declared.is_some() {
-                        return Err(PhotonErrorKind::error(
-                            PhotonErrorKind::DuplicateNamespace,
-                            self.previous_span(),
-                        ));
-                    }
-
-                    namespace_declared = Some(qualified_namespace.clone());
+            if let Located {
+                value: TopLevelItem::Namespace(qualified_namespace),
+                ..
+            } = &item
+            {
+                // duplicate namespace
+                if namespace_declared.is_some() {
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::DuplicateNamespace,
+                        self.previous_span(),
+                    ));
                 }
-                _ => {}
+
+                namespace_declared = Some(qualified_namespace.clone());
             };
 
             items.push(item);
