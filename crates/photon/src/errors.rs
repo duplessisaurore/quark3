@@ -113,6 +113,13 @@ pub enum PhotonErrorKind {
     /// No namespace was delcared in the module!
     NoNamespace,
 
+    /// More than one opened namespace contains the same referenced symbol
+    /// and we cannot resolve a qualified name to a specific one
+    AmbiguousUsingName {
+        name: QualifiedName,
+        candidates: Vec<QualifiedName>,
+    },
+
     /// A duplicate global was declared with this name!
     DuplicateGlobal { name: QualifiedName },
 
@@ -363,10 +370,16 @@ impl Display for PhotonErrorKind {
                 )
             }
             Self::UnterminatedStringLiteral => {
-                write!(f, "unterminated string literal, expected a closing `\"` before the end of the code content but could not find one!")
+                write!(
+                    f,
+                    "unterminated string literal, expected a closing `\"` before the end of the code content but could not find one!"
+                )
             }
             Self::InvalidStringEscape { character } => {
-                write!(f, "invalid escape sequence `\\{character}` in string literal")
+                write!(
+                    f,
+                    "invalid escape sequence `\\{character}` in string literal"
+                )
             }
             Self::UnexpectedCharacter { character } => {
                 write!(
@@ -469,6 +482,17 @@ impl Display for PhotonErrorKind {
             }
             Self::NoNamespace => {
                 write!(f, "unexpectedly found no namespace delcarations in file")
+            }
+            Self::AmbiguousUsingName { name, candidates } => {
+                write!(
+                    f,
+                    "the name `{name}` is ambiguous between imported symbols: {}",
+                    candidates
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             }
             Self::DuplicateGlobal { name } => {
                 write!(

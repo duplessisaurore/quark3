@@ -100,6 +100,16 @@ pub struct SymbolTable {
     globals: HashMap<QualifiedName, GlobalSignature>,
 }
 
+// Kinds of symbols supported
+// in photon3 which can be referenced
+#[derive(Clone, Copy)]
+enum SymbolKind {
+    Function,
+    Object,
+    Global,
+    Callable,
+}
+
 /// An output source location which can be accepted by the gluon3 linker
 /// with line and col info.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -447,7 +457,14 @@ pub fn lower_modules(
             };
 
             // Get its signature from the name
-            let name = QualifiedName::from_text(function).resolve(&module.namespace);
+            let name = symbols
+                .resolve_name(
+                    &QualifiedName::from_text(function),
+                    module,
+                    SymbolKind::Function,
+                    item.span,
+                )
+                .map_err(|error| (index, error))?;
             let signature = symbols.function(&name).ok_or_else(|| {
                 (
                     index,
@@ -1210,7 +1227,184 @@ impl SymbolTable {
             }
         }
 
+        // Resolve declaration types after collecting every module
+        // for @using to take place on these declaration types too
+        for module in modules {
+            for item in &module.items {
+                match &item.value {
+                    TopLevelItem::Function(function) => {
+                        let name = QualifiedName::from_text(&function.name)
+                            .qualify_from(&module.namespace);
+
+                        // update parameter types
+                        let parameters = function
+                            .parameters
+                            .iter()
+                            .map(|param| {
+                                table.resolve_type_in_module(
+                                    &param.declared_type,
+                                    module,
+                                    item.span,
+                                )
+                            })
+                            .collect::<PhotonResult<Vec<_>>>()?;
+
+                        // update return type
+                        let return_type = table.resolve_type_in_module(
+                            &function.return_type,
+                            module,
+                            item.span,
+                        )?;
+
+                        // update signature of this function
+                        let signature = table
+                            .functions
+                            .get_mut(&name)
+                            .expect("function was collected");
+
+                        signature.parameters = parameters;
+                        signature.return_type = return_type;
+                    }
+
+                    TopLevelItem::Object(object) => {
+                        let name =
+                            QualifiedName::from_text(&object.name).qualify_from(&module.namespace);
+
+                        // update field types
+                        let fields = object
+                            .fields
+                            .iter()
+                            .map(|field| {
+                                Ok((
+                                    field.name.clone(),
+                                    table.resolve_type_in_module(
+                                        &field.declared_type,
+                                        module,
+                                        item.span,
+                                    )?,
+                                ))
+                            })
+                            .collect::<PhotonResult<Vec<_>>>()?;
+
+                        table
+                            .objects
+                            .get_mut(&name)
+                            .expect("object was collected")
+                            .fields = fields;
+                    }
+                    TopLevelItem::Global(global) => {
+                        let name =
+                            QualifiedName::from_text(&global.name).qualify_from(&module.namespace);
+
+                        // update type of global
+                        let global_type = table.resolve_type_in_module(
+                            &global.declared_type,
+                            module,
+                            item.span,
+                        )?;
+
+                        table
+                            .globals
+                            .get_mut(&name)
+                            .expect("global was collected")
+                            .global_type = global_type;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         Ok(table)
+    }
+
+    /// Resolve an unqualified reference using local symbols first, then @using.
+    ///
+    /// Explicitly qualified names are never redirected through opened namespaces
+    /// and are assumed to map directly through
+    fn resolve_name(
+        &self,
+        name: &QualifiedName,
+        module: &Module,
+        kind: SymbolKind,
+        span: SourceSpan,
+    ) -> PhotonResult<QualifiedName> {
+        // Try resolve name in locals
+        let local = name.resolve(&module.namespace);
+        if !name.is_unqualified() || self.contains_symbol(&local, kind) {
+            return Ok(local);
+        }
+
+        // Try resolve name in using namespaces
+        let mut matches = Vec::new();
+        for item in &module.items {
+            let TopLevelItem::Using(namespace) = &item.value else {
+                continue;
+            };
+
+            let candidate = name.qualify_from(namespace);
+            if self.contains_symbol(&candidate, kind) && !matches.contains(&candidate) {
+                matches.push(candidate);
+            }
+        }
+
+        match matches.len() {
+            0 => Ok(local),
+            1 => Ok(matches.remove(0)),
+
+            // more than one match = ambiguous using similar to gluon3
+            _ => Err(PhotonErrorKind::error(
+                PhotonErrorKind::AmbiguousUsingName {
+                    name: name.clone(),
+                    candidates: matches,
+                },
+                span,
+            )),
+        }
+    }
+
+    // check if we actually have a symbol of this type under this qualified name
+    fn contains_symbol(&self, name: &QualifiedName, kind: SymbolKind) -> bool {
+        match kind {
+            SymbolKind::Function => self.functions.contains_key(name),
+            SymbolKind::Object => self.objects.contains_key(name),
+            SymbolKind::Global => self.globals.contains_key(name),
+            SymbolKind::Callable => {
+                self.functions.contains_key(name) || self.objects.contains_key(name)
+            }
+        }
+    }
+
+    /// Canonicalise object types (including generic arguments) with @using in scope.
+    fn resolve_type_in_module(
+        &self,
+        item_type: &TypeName,
+        module: &Module,
+        span: SourceSpan,
+    ) -> PhotonResult<TypeName> {
+        match item_type {
+            // resolve down object type with @using in mind
+            TypeName::Object(name) => Ok(TypeName::Object(self.resolve_name(
+                name,
+                module,
+                SymbolKind::Object,
+                span,
+            )?)),
+
+            TypeName::Applied {
+                constructor,
+                arguments,
+            } => Ok(TypeName::Applied {
+                // resolve the constructor & arg types to this applied
+                constructor: Box::new(self.resolve_type_in_module(constructor, module, span)?),
+
+                arguments: arguments
+                    .iter()
+                    .map(|argument| self.resolve_type_in_module(argument, module, span))
+                    .collect::<PhotonResult<Vec<_>>>()?,
+            }),
+
+            other => Ok(other.clone()),
+        }
     }
 
     /// Attempts to resolve a function from it's qualfied name in the
@@ -1487,18 +1681,21 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 .parameters
                 .iter()
                 .map(|parameter| {
-                    (
+                    Ok((
                         parameter.name.clone(),
-                        parameter
-                            .declared_type
-                            .canonicalise(&self.module.namespace)
+                        self.symbols
+                            .resolve_type_in_module(
+                                &parameter.declared_type,
+                                self.module,
+                                SourceSpan::default(),
+                            )?
                             .substitute(&substitution),
-                    )
+                    ))
                 })
-                .collect(),
-            ret_type: function
-                .return_type
-                .canonicalise(&self.module.namespace)
+                .collect::<PhotonResult<HashMap<_, _>>>()?,
+            ret_type: self
+                .symbols
+                .resolve_type_in_module(&function.return_type, self.module, SourceSpan::default())?
                 .substitute(&substitution),
             substitution,
         };
@@ -1649,7 +1846,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         )?;
 
         // type of the local binding
-        let binding_type = self.resolve_type(&binding.declared_type, context);
+        let binding_type = self.resolve_type(&binding.declared_type, context, span)?;
 
         // ensure binding type matches array type if it has some
         if let Some(element_type) = array.value_type.array_element_type() {
@@ -1851,7 +2048,9 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 }
 
                 // Not a local? try globals, else it doesn't exist
-                let global_name = name.resolve(&self.module.namespace);
+                let global_name =
+                    self.symbols
+                        .resolve_name(name, self.module, SymbolKind::Global, span)?;
                 let global_sig = self.symbols.global(&global_name).ok_or_else(|| {
                     PhotonErrorKind::error(
                         PhotonErrorKind::UnknownAssignmentTarget {
@@ -1886,7 +2085,9 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             }
             // A qualified name/not quite direct, which we assume to be a global.
             Expression::Name(name) => {
-                let global_name = name.resolve(&self.module.namespace);
+                let global_name =
+                    self.symbols
+                        .resolve_name(name, self.module, SymbolKind::Global, span)?;
                 let global_sig = self.symbols.global(&global_name).ok_or_else(|| {
                     PhotonErrorKind::error(
                         PhotonErrorKind::UnknownGlobal {
@@ -2212,7 +2413,12 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 }
 
                 // resolve to underlying function
-                let resolved_name = function_name.resolve(&self.module.namespace);
+                let resolved_name = self.symbols.resolve_name(
+                    function_name,
+                    self.module,
+                    SymbolKind::Callable,
+                    span,
+                )?;
 
                 // if this is a call to an object constructor, then we cant tail call to it because
                 // its not a proper tail callable thing (object.new vs call)
@@ -2247,8 +2453,8 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 // resolve type arguments
                 let explicit_type_arguments = type_arguments
                     .iter()
-                    .map(|explicit_type| self.resolve_type(explicit_type, context))
-                    .collect::<Vec<_>>();
+                    .map(|explicit_type| self.resolve_type(explicit_type, context, span))
+                    .collect::<PhotonResult<Vec<_>>>()?;
 
                 // types of arguments
                 let actual_types = arguments
@@ -2328,8 +2534,8 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 // resolve type arguments
                 let explicit_type_arguments = type_arguments
                     .iter()
-                    .map(|explicit_type| self.resolve_type(explicit_type, context))
-                    .collect::<Vec<_>>();
+                    .map(|explicit_type| self.resolve_type(explicit_type, context, span))
+                    .collect::<PhotonResult<Vec<_>>>()?;
 
                 // types of arguments
                 let mut actual_types = Vec::with_capacity(arguments.len() + 1);
@@ -2364,9 +2570,16 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
 
     /// Resolve a source type in the definition's namespace, then substitute the
     /// concrete arguments of the current function instance.
-    fn resolve_type(&self, ty: &TypeName, context: &FunctionContext) -> TypeName {
-        ty.canonicalise(&self.module.namespace)
-            .substitute(&context.substitution)
+    fn resolve_type(
+        &self,
+        ty: &TypeName,
+        context: &FunctionContext,
+        span: SourceSpan,
+    ) -> PhotonResult<TypeName> {
+        Ok(self
+            .symbols
+            .resolve_type_in_module(ty, self.module, span)?
+            .substitute(&context.substitution))
     }
 
     /// Check a call and select the emitted function
@@ -2443,7 +2656,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         context: &FunctionContext,
         source: TypeMismatchSource,
     ) -> PhotonResult<LoweredExpression> {
-        let expected_type = self.resolve_type(expected_type, context);
+        let expected_type = self.resolve_type(expected_type, context, expression.span)?;
 
         // Array literals can use the surrounding annotation or return type,
         // including when there are no elements from which to infer a type.
@@ -2485,7 +2698,10 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     ) -> PhotonResult<QualifiedName> {
         match method {
             // A fully qualified name has no resolution to be done.
-            MethodName::Qualified(name) => Ok(name.resolve(&self.module.namespace)),
+            MethodName::Qualified(name) => {
+                self.symbols
+                    .resolve_name(name, self.module, SymbolKind::Function, span)
+            }
 
             // Infer from method name (under its namespace)
             MethodName::Inferred(method_name) => {
@@ -2615,7 +2831,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 } else {
                     block(&elements)
                 };
-                
+
                 LoweredExpression::value(
                     format!("!std::array {} ( {body} )", bytes.len()),
                     TypeName::array_of(TypeName::UInt),
@@ -2668,7 +2884,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             } => {
                 // map into source and return as expr of type, we dont normalise bcz it should do what it says.
                 let boson3_source = self.lower_boson3_statement(body, *body_span)?;
-                let expr_type = self.resolve_type(declared_type, context);
+                let expr_type = self.resolve_type(declared_type, context, span)?;
                 LoweredExpression::value(boson3_source, expr_type)
             }
         };
@@ -2702,7 +2918,9 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         }
 
         // isnt a local or unit, try map global.
-        let global_name = name.resolve(&self.module.namespace);
+        let global_name = self
+            .symbols
+            .resolve_name(name, self.module, SymbolKind::Global, span)?;
         if let Some(global_sig) = self.symbols.global(&global_name) {
             let global_type = global_sig.global_type.clone();
 
@@ -2740,7 +2958,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         )?;
 
         // Target type we are casting to with this new expression
-        let target_type = self.resolve_type(target_type, context);
+        let target_type = self.resolve_type(target_type, context, span)?;
 
         // Void casts are illegal, as thats just drop bruh
         if target_type == TypeName::Void {
@@ -2953,13 +3171,15 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         }
 
         // Resolve it's name, so we can find out if its a function or object call.
-        let resolved_name = callee_name.resolve(&self.module.namespace);
+        let resolved_name =
+            self.symbols
+                .resolve_name(callee_name, self.module, SymbolKind::Callable, span)?;
 
         // Get type arguments for resolving
         let explicit_type_arguments = type_arguments
             .iter()
-            .map(|explicit_type| self.resolve_type(explicit_type, context))
-            .collect::<Vec<_>>();
+            .map(|explicit_type| self.resolve_type(explicit_type, context, span))
+            .collect::<PhotonResult<Vec<_>>>()?;
 
         // Object constructor
         if let Some(object) = self.symbols.object(&resolved_name) {
@@ -3191,8 +3411,8 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         // get explicit type arguments to this method call
         let explicit_type_arguments = type_arguments
             .iter()
-            .map(|explicit_type| self.resolve_type(explicit_type, context))
-            .collect::<Vec<_>>();
+            .map(|explicit_type| self.resolve_type(explicit_type, context, span))
+            .collect::<PhotonResult<Vec<_>>>()?;
 
         // actual types of all the method params
         let mut actual_types = Vec::with_capacity(arguments.len() + 1);
