@@ -241,6 +241,7 @@ impl<'tokens> Parser<'tokens> {
             TokenKind::Directive(directive_name) => match directive_name.as_str() {
                 "namespace" => self.parse_namespace(),
                 "requires" => self.parse_requires(),
+                "using" => self.parse_using(),
                 "entry" => self.parse_entry(),
                 "capability" => self.parse_capability(),
                 "global" => self.parse_global(),
@@ -330,6 +331,21 @@ impl<'tokens> Parser<'tokens> {
         let end = self.previous_span().end;
 
         let item = Located::new(TopLevelItem::Requires(name), (start..end).into());
+
+        self.require_newline()?;
+
+        Ok(item)
+    }
+
+    /// Parse one using declaration at the current possition
+    fn parse_using(&mut self) -> PhotonResult<Located<TopLevelItem>> {
+        let start = self.expect_directive("using")?.start;
+
+        // Name of the module we are namespace opening
+        let name = self.parse_qualified_name()?;
+        let end = self.previous_span().end;
+
+        let item = Located::new(TopLevelItem::Using(name), (start..end).into());
 
         self.require_newline()?;
 

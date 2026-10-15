@@ -102,6 +102,9 @@ pub enum TopLevelItem {
     /// @requires
     Requires(QualifiedName),
 
+    /// @using
+    Using(QualifiedName),
+
     /// @entry
     Entry(String),
 

@@ -19,6 +19,15 @@ pub enum LinkerErrorKind {
     /// There was an undefined name that could not be remapped
     UndefinedName { name: String },
 
+    /// An unqualified name resolves to multiple imported namespaces
+    ///
+    /// This is not permitted, e.g which namespace do we actually resolve it to?
+    AmbiguousUsing {
+        name: String,
+        first: String,
+        second: String,
+    },
+
     /// There was a file that did not declare its namspace
     UndeclaredNamespace { file: String },
 
@@ -113,6 +122,128 @@ pub struct RemapMaps {
 
     // @macro remap
     pub macro_map: HashMap<String, String>,
+
+    /// File-wide namespaces opened by `@using`.
+    pub usings: Vec<String>,
+}
+
+/// The kind a symbol is, for mapping with
+#[derive(Clone, Copy)]
+enum SymbolKind {
+    Global,
+    Function,
+    Capability,
+    Object,
+    Macro,
+}
+
+/// Index of symbols by their type
+/// 
+/// This is global across all files.
+#[derive(Default)]
+struct SymbolIndex {
+    globals: HashSet<String>,
+    functions: HashSet<String>,
+    capabilities: HashSet<String>,
+    objects: HashSet<String>,
+    macros: HashSet<String>,
+}
+
+impl SymbolIndex {
+    // Grabs all of the symbols in all of the provided linkable files
+    // to produce one global symbol index for checking with
+    fn from_sources(sources: &[LinkableFile]) -> Self {
+        let mut index = Self::default();
+
+        for file in sources {
+            let maps = file
+                .remap_maps
+                .as_ref()
+                .expect("expected all top-level remap maps to be resolved");
+
+            // Extend the index with file specific remap maps
+            index.globals.extend(maps.globals_map.values().cloned());
+            index.functions.extend(maps.function_map.values().cloned());
+            index
+                .capabilities
+                .extend(maps.capability_map.values().cloned());
+            index.objects.extend(maps.object_map.values().cloned());
+            index.macros.extend(maps.macro_map.values().cloned());
+        }
+        index
+    }
+
+    // Returns whether or not this `name` with this `kind` of symbol
+    // exists in the full index of symbols
+    fn contains(&self, kind: SymbolKind, name: &str) -> bool {
+        match kind {
+            SymbolKind::Global => self.globals.contains(name),
+            SymbolKind::Function => self.functions.contains(name),
+            SymbolKind::Capability => self.capabilities.contains(name),
+            SymbolKind::Object => self.objects.contains(name),
+            SymbolKind::Macro => self.macros.contains(name),
+        }
+    }
+}
+
+/// Resolves a symbol to the full symbol with a namespace
+///
+/// order is:
+///
+/// local
+/// qualified name
+/// using
+///
+fn resolve_symbol(
+    name: &str,
+    local_map: &HashMap<String, String>,
+    usings: &[String],
+    valid_symbols: &HashSet<String>,
+    symbol_index: &SymbolIndex,
+    kind: SymbolKind,
+) -> Result<String, LinkerErrorKind> {
+    // local first
+    if let Some(local) = local_map.get(name) {
+        return Ok(local.clone());
+    }
+
+    // Preserve fully qualified names already.
+    if valid_symbols.contains(name) {
+        return Ok(name.to_string());
+    }
+
+    // Qualified names can never be @using'd because
+    // that means that namespace probably doesn't exist (rather than being @using'd)
+    if name.contains("::") {
+        return Err(LinkerErrorKind::UndefinedName {
+            name: name.to_string(),
+        });
+    }
+
+    // Try find matching candidate in a @using namespace
+    let mut found: Option<String> = None;
+
+    for namespace in usings {
+        // Test if this candidate exists
+        let candidate = format!("{namespace}::{name}");
+        if !symbol_index.contains(kind, &candidate) {
+            continue;
+        }
+
+        // Duplicate candidate match
+        if let Some(first) = &found {
+            return Err(LinkerErrorKind::AmbiguousUsing {
+                name: name.to_string(),
+                first: first.clone(),
+                second: candidate,
+            });
+        }
+        found = Some(candidate);
+    }
+
+    found.ok_or_else(|| LinkerErrorKind::UndefinedName {
+        name: name.to_string(),
+    })
 }
 
 impl Linker {
@@ -191,11 +322,17 @@ impl Linker {
     fn remap_all_instructions(&mut self) -> Result<(), Vec<LinkerError>> {
         // The full valid map for matching on each source file
         let valid_map = std::mem::take(&mut self.valid_symbols);
+
+        // Full index of symbols across all files.
+        let symbol_index = SymbolIndex::from_sources(&self.sources);
+
         let mut errors = Vec::new();
 
         // Remap each file's instructions
         for file in &mut self.sources {
-            if let Err(this_errors) = Linker::remap_instructions(&self.loc_maps, &valid_map, file) {
+            if let Err(this_errors) =
+                Linker::remap_instructions(&self.loc_maps, &valid_map, &symbol_index, file)
+            {
                 errors.extend(this_errors);
             }
         }
@@ -216,6 +353,7 @@ impl Linker {
     fn remap_instructions(
         loc_maps: &HashMap<String, usize>,
         valid_symbols: &HashSet<String>,
+        symbol_index: &SymbolIndex,
         file: &mut LinkableFile,
     ) -> Result<(), Vec<LinkerError>> {
         // The new file contents after remapping
@@ -253,6 +391,7 @@ impl Linker {
         let capability_map = &remap_maps.capability_map;
         let object_map = &remap_maps.object_map;
         let macro_map = &remap_maps.macro_map;
+        let usings = &remap_maps.usings;
 
         let file_namespace = &file
             .namespace
@@ -353,20 +492,19 @@ impl Linker {
                         }
 
                         // Get the name from the map, else test if its in the valid symbols map.
-                        let new_global_name = match globals_map.get(*global).ok_or_else(|| {
-                            LinkerErrorKind::UndefinedName {
-                                name: global.to_string(),
-                            }
-                            .with_line(line_number, file.full_file_name.clone())
-                        }) {
+                        let new_global_name = match resolve_symbol(
+                            global,
+                            globals_map,
+                            usings,
+                            valid_symbols,
+                            symbol_index,
+                            SymbolKind::Global,
+                        ) {
                             Ok(name) => name,
-                            Err(error) => {
-                                if valid_symbols.contains(*global) {
-                                    *global
-                                } else {
-                                    errors.push(error);
-                                    continue;
-                                }
+                            Err(kind) => {
+                                errors
+                                    .push(kind.with_line(line_number, file.full_file_name.clone()));
+                                continue;
                             }
                         };
 
@@ -380,7 +518,10 @@ impl Linker {
                     }
 
                     // object remapping
-                    [op @ ("object.new" | "onw" | "@push.object" | "object.type.tag"), object] => {
+                    [
+                        op @ ("object.new" | "onw" | "@push.object" | "object.type.tag"),
+                        object,
+                    ] => {
                         // Do not overwrite macro params!
                         if let Some(params) = &macro_params
                             && params.iter().any(|param| param == object)
@@ -392,24 +533,24 @@ impl Linker {
                         // @raw is passthrough to quark3
                         let new_object_name = if object != &"@raw" {
                             // not @raw, resolve actual object name
-                            match object_map.get(*object).ok_or_else(|| {
-                                LinkerErrorKind::UndefinedName {
-                                    name: object.to_string(),
-                                }
-                                .with_line(line_number, file.full_file_name.clone())
-                            }) {
+                            match resolve_symbol(
+                                object,
+                                object_map,
+                                usings,
+                                valid_symbols,
+                                symbol_index,
+                                SymbolKind::Object,
+                            ) {
                                 Ok(name) => name,
-                                Err(error) => {
-                                    if valid_symbols.contains(*object) {
-                                        *object
-                                    } else {
-                                        errors.push(error);
-                                        continue;
-                                    }
+                                Err(kind) => {
+                                    errors.push(
+                                        kind.with_line(line_number, file.full_file_name.clone()),
+                                    );
+                                    continue;
                                 }
                             }
                         } else {
-                            "@raw"
+                            "@raw".to_string()
                         };
 
                         push_source_aware(
@@ -445,24 +586,24 @@ impl Linker {
                         // @raw is passthrough to quark3
                         let new_object_name = if object != &"@raw" {
                             // not @raw, resolve actual object name
-                            match object_map.get(object_name).ok_or_else(|| {
-                                LinkerErrorKind::UndefinedName {
-                                    name: object_name.to_string(),
-                                }
-                                .with_line(line_number, file.full_file_name.clone())
-                            }) {
+                            match resolve_symbol(
+                                object_name,
+                                object_map,
+                                usings,
+                                valid_symbols,
+                                symbol_index,
+                                SymbolKind::Object,
+                            ) {
                                 Ok(name) => name,
-                                Err(error) => {
-                                    if valid_symbols.contains(object_name) {
-                                        object_name
-                                    } else {
-                                        errors.push(error);
-                                        continue;
-                                    }
+                                Err(kind) => {
+                                    errors.push(
+                                        kind.with_line(line_number, file.full_file_name.clone()),
+                                    );
+                                    continue;
                                 }
                             }
                         } else {
-                            "@raw"
+                            "@raw".to_string()
                         };
 
                         push_source_aware(
@@ -475,7 +616,10 @@ impl Linker {
                     }
 
                     // function remapping
-                    [op @ ("call" | "cal" | "tail.call" | "tcl" | "@push.fn"), function] => {
+                    [
+                        op @ ("call" | "cal" | "tail.call" | "tcl" | "@push.fn"),
+                        function,
+                    ] => {
                         // Do not overwrite macro params!
                         if let Some(params) = &macro_params
                             && params.iter().any(|param: &String| param == function)
@@ -487,24 +631,24 @@ impl Linker {
                         // @raw is passthrough to quark3
                         let new_function_name = if function != &"@raw" {
                             // not @raw, lookup map
-                            match function_map.get(*function).ok_or_else(|| {
-                                LinkerErrorKind::UndefinedName {
-                                    name: function.to_string(),
-                                }
-                                .with_line(line_number, file.full_file_name.clone())
-                            }) {
+                            match resolve_symbol(
+                                function,
+                                function_map,
+                                usings,
+                                valid_symbols,
+                                symbol_index,
+                                SymbolKind::Function,
+                            ) {
                                 Ok(name) => name,
-                                Err(error) => {
-                                    if valid_symbols.contains(*function) {
-                                        *function
-                                    } else {
-                                        errors.push(error);
-                                        continue;
-                                    }
+                                Err(kind) => {
+                                    errors.push(
+                                        kind.with_line(line_number, file.full_file_name.clone()),
+                                    );
+                                    continue;
                                 }
                             }
                         } else {
-                            "@raw"
+                            "@raw".to_string()
                         };
 
                         push_source_aware(
@@ -526,23 +670,21 @@ impl Linker {
                             continue;
                         }
 
-                        let new_capability_name =
-                            match capability_map.get(*capability).ok_or_else(|| {
-                                LinkerErrorKind::UndefinedName {
-                                    name: capability.to_string(),
-                                }
-                                .with_line(line_number, file.full_file_name.clone())
-                            }) {
-                                Ok(name) => name,
-                                Err(error) => {
-                                    if valid_symbols.contains(*capability) {
-                                        *capability
-                                    } else {
-                                        errors.push(error);
-                                        continue;
-                                    }
-                                }
-                            };
+                        let new_capability_name = match resolve_symbol(
+                            capability,
+                            capability_map,
+                            usings,
+                            valid_symbols,
+                            symbol_index,
+                            SymbolKind::Capability,
+                        ) {
+                            Ok(name) => name,
+                            Err(kind) => {
+                                errors
+                                    .push(kind.with_line(line_number, file.full_file_name.clone()));
+                                continue;
+                            }
+                        };
 
                         push_source_aware(
                             file_index,
@@ -559,20 +701,19 @@ impl Linker {
                         let name = invocation.strip_prefix("!").unwrap_or(*invocation);
 
                         // Find new remapped name
-                        let new_macro_name = match macro_map.get(name).ok_or_else(|| {
-                            LinkerErrorKind::UndefinedName {
-                                name: name.to_string(),
-                            }
-                            .with_line(line_number, file.full_file_name.clone())
-                        }) {
+                        let new_macro_name = match resolve_symbol(
+                            name,
+                            macro_map,
+                            usings,
+                            valid_symbols,
+                            symbol_index,
+                            SymbolKind::Macro,
+                        ) {
                             Ok(name) => name,
-                            Err(error) => {
-                                if valid_symbols.contains(name) {
-                                    name
-                                } else {
-                                    errors.push(error);
-                                    continue;
-                                }
+                            Err(kind) => {
+                                errors
+                                    .push(kind.with_line(line_number, file.full_file_name.clone()));
+                                continue;
                             }
                         };
 
@@ -632,6 +773,7 @@ impl Linker {
         let mut capability_map = HashMap::new();
         let mut object_map = HashMap::new();
         let mut macro_map = HashMap::new();
+        let mut usings = Vec::new();
 
         let file_namespace = file
             .namespace
@@ -652,6 +794,15 @@ impl Linker {
             let tokens: Vec<&str> = line.split_whitespace().collect();
 
             match tokens.as_slice() {
+                // @using opens a namespace for all references in this file.
+                ["@using", namespace] => {
+                    if !usings
+                        .iter()
+                        .any(|used: &String| used.as_str() == *namespace)
+                    {
+                        usings.push(namespace.to_string());
+                    }
+                }
                 // @global <name>
                 ["@global", name] => {
                     let remapped = format!("{}::{}", file_namespace, name);
@@ -787,7 +938,8 @@ impl Linker {
                 // These are already consumed earlier, we ignore them now
                 consumed
                     if consumed[0].starts_with("@namespace")
-                        || consumed[0].starts_with("@requires") =>
+                        || consumed[0].starts_with("@requires")
+                        || consumed[0].starts_with("@using") =>
                 {
                     output.push(String::new());
                 }
@@ -817,6 +969,7 @@ impl Linker {
             capability_map,
             object_map,
             macro_map,
+            usings,
         };
 
         file.remap_maps = Some(remap_map);
@@ -893,7 +1046,7 @@ impl Linker {
             let tokens: Vec<&str> = line.split_whitespace().collect();
 
             // Search for the requires directive in the file.
-            if let ["@requires", namespace] = tokens.as_slice() {
+            if let ["@requires" | "@using", namespace] = tokens.as_slice() {
                 // Make sure the namespace is defined.
                 if !self.namespaces.contains(&NameSpace(namespace.to_string())) {
                     errors.push(
@@ -980,6 +1133,16 @@ impl Display for LinkerErrorKind {
             Self::UndefinedName { name } => {
                 write!(f, "An undefined name was referenced: `{name}`")
             }
+            Self::AmbiguousUsing {
+                name,
+                first,
+                second,
+            } => {
+                write!(
+                    f,
+                    "The name `{name}` is ambiguous due to namespace conflict between `{first}` and `{second}`, use a fully qualified name"
+                )
+            }
             Self::DuplicateNamespace {
                 namespace,
                 file_a,
@@ -1005,7 +1168,7 @@ impl Display for LinkerErrorKind {
             } => {
                 write!(
                     f,
-                    "The file `{file_requires}` @requires the namespace `{namespace}` but it was not found"
+                    "The file `{file_requires}` references the namespace `{namespace}` via @requires or @using, but it was not found"
                 )
             }
             Self::InvalidSourceLocationDirective { reason } => {

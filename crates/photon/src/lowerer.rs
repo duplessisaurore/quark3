@@ -1379,6 +1379,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             // namespace guaranteed to be uniq alr due to parser
             TopLevelItem::Namespace(namespace) => format!("@namespace {namespace}"),
             TopLevelItem::Requires(namespace) => format!("@requires {namespace}"),
+            TopLevelItem::Using(namespace) => format!("@using {namespace}"),
             // We don't actually handle entries for a specific module,
             // as the global intialiser is the true "entrypoint" which calls this
             TopLevelItem::Entry(_) => return Ok(String::new()),
