@@ -25,6 +25,12 @@ pub enum PhotonErrorKind {
     /// The reason for this happening is stored in `reason`.
     MalformedNumber { reason: String },
 
+    /// A string while lexing reached a newline or EOF before the closing quote.
+    UnterminatedStringLiteral,
+
+    /// A backslash in a quoted string was followed by an invalid escape code.
+    InvalidStringEscape { character: char },
+
     /// A character was not expected to be here!
     UnexpectedCharacter { character: char },
 
@@ -355,6 +361,12 @@ impl Display for PhotonErrorKind {
                     f,
                     "expected to find a valid numeric literal here, instead the literal was malformed: `{reason}`"
                 )
+            }
+            Self::UnterminatedStringLiteral => {
+                write!(f, "unterminated string literal, expected a closing `\"` before the end of the code content but could not find one!")
+            }
+            Self::InvalidStringEscape { character } => {
+                write!(f, "invalid escape sequence `\\{character}` in string literal")
             }
             Self::UnexpectedCharacter { character } => {
                 write!(

@@ -1794,6 +1794,11 @@ impl<'tokens> Parser<'tokens> {
 
             TokenKind::BoolLiteral(value) => Ok(Located::new(Expression::BoolLiteral(value), span)),
 
+            // The lexer is responsible for parsing string literals. (funny enough)
+            TokenKind::StringLiteral(value) => {
+                Ok(Located::new(Expression::StringLiteral(value), span))
+            }
+
             // sub-expression in paren
             TokenKind::LeftParen => {
                 let start = span.start;

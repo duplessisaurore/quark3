@@ -5,7 +5,7 @@
 //!
 //! - tokenising the content
 //! - handling raw blocks of boson3
-//! - handling numeric literals
+//! - handling numeric and string literals
 
 use std::{fmt, str::Chars};
 
@@ -36,6 +36,7 @@ pub enum TokenKind {
     UIntLiteral(u64),
     FloatLiteral(f64),
     BoolLiteral(bool),
+    StringLiteral(String),
 
     // Boson3 directives/body/macro statements
     Directive(String),
@@ -213,6 +214,12 @@ impl<'src> Lexer<'src> {
             self.skip_whitespace_comments();
 
             if self.try_lex_legacy_boson_expression()? {
+                continue;
+            }
+
+            // A quoted string starts with a "
+            if self.peek_char() == Some('"') {
+                self.lex_string()?;
                 continue;
             }
 
@@ -418,7 +425,8 @@ impl<'src> Lexer<'src> {
                 continue;
             }
 
-            // photon3 strings arent supported, so a quote in a boson3 block is not really anything special
+            // Legacy Boson3 bodies are raw and are not subjected to Photon3
+            // string-literal matching.
 
             match char {
                 '{' => depth += 1,
@@ -436,6 +444,68 @@ impl<'src> Lexer<'src> {
 
         self.chars = restore_point;
         None
+    }
+
+    /// Lexes a double-quoted string literal and common escape
+    /// codes that can be used in this string literal
+    fn lex_string(&mut self) -> PhotonResult<()> {
+        let start = self.current_pos();
+
+        // Opening quote
+        self.advance();
+
+        let mut value = String::new();
+
+        loop {
+            match self.peek_char() {
+                // Closing quote
+                Some('"') => {
+                    self.advance();
+                    self.push_token(TokenKind::StringLiteral(value), start);
+                    return Ok(());
+                }
+                Some('\\') => {
+                    let escape_start = self.current_pos();
+                    self.advance();
+
+                    // supported escape sequences
+                    let decoded = match self.peek_char() {
+                        Some('n') => '\n',
+                        Some('r') => '\r',
+                        Some('t') => '\t',
+                        Some('0') => '\0',
+                        Some('"') => '"',
+                        Some('\\') => '\\',
+                        Some('\n' | '\r') | None => {
+                            return Err(PhotonErrorKind::error(
+                                PhotonErrorKind::UnterminatedStringLiteral,
+                                self.span_from(start),
+                            ));
+                        }
+                        Some(character) => {
+                            self.advance();
+                            return Err(PhotonErrorKind::error(
+                                PhotonErrorKind::InvalidStringEscape { character },
+                                self.span_from(escape_start),
+                            ));
+                        }
+                    };
+
+                    self.advance();
+                    value.push(decoded);
+                }
+                None => {
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::UnterminatedStringLiteral,
+                        self.span_from(start),
+                    ));
+                }
+                Some(character) => {
+                    self.advance();
+                    value.push(character);
+                }
+            }
+        }
     }
 
     /// Attempt to tokenise a numeric literal
@@ -905,6 +975,7 @@ impl fmt::Display for TokenKind {
             Self::UIntLiteral(value) => write!(formatter, "UInt literal `{value}u`"),
             Self::FloatLiteral(value) => write!(formatter, "Float literal `{value}`"),
             Self::BoolLiteral(value) => write!(formatter, "Bool literal `{value}`"),
+            Self::StringLiteral(value) => write!(formatter, "String literal `{value:?}`"),
             Self::Directive(name) => write!(formatter, "directive `@{name}`"),
             other => formatter.write_str(other.symbol_name()),
         }
@@ -986,6 +1057,7 @@ impl TokenKind {
             Self::UIntLiteral(_) => "UInt literal",
             Self::FloatLiteral(_) => "Float literal",
             Self::BoolLiteral(_) => "Bool literal",
+            Self::StringLiteral(_) => "String literal",
             Self::Directive(_) => "Boson3 @directive",
             Self::Boson3(_) => "legacy boson3 expr",
         }

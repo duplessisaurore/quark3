@@ -2598,6 +2598,28 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             Expression::BoolLiteral(value) => {
                 LoweredExpression::value(format!("!std::bool {value}"), TypeName::Bool)
             }
+            // Emit the decoded string bytes out,
+            // we cant use the existing @string directive because that doesn't
+            // respect new lines and things
+            Expression::StringLiteral(value) => {
+                let bytes = value.as_bytes();
+                let elements = bytes
+                    .iter()
+                    .map(|byte| format!("!std::uint {byte}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let body = if bytes.is_empty() {
+                    "{}".to_owned()
+                } else {
+                    block(&elements)
+                };
+                
+                LoweredExpression::value(
+                    format!("!std::array {} ( {body} )", bytes.len()),
+                    TypeName::array_of(TypeName::UInt),
+                )
+            }
             Expression::Name(name) => self.lower_name_expr(name, span, context)?,
             Expression::ArrayLiteral(elements) => {
                 self.lower_array_lit_expr(elements, context, None)?

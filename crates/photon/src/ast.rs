@@ -248,6 +248,7 @@ pub enum Expression {
     UIntLiteral(u64),
     FloatLiteral(f64),
     BoolLiteral(bool),
+    StringLiteral(String),
     Name(QualifiedName),
     ArrayLiteral(Vec<Located<Expression>>),
     Call {
@@ -553,6 +554,8 @@ impl TypeName {
                 "UInt" => return Self::UInt,
                 "Float" => return Self::Float,
                 "Bool" => return Self::Bool,
+                // Boson3 strings (photon3 strings too) are UTF-8 byte arrays technically
+                "String" => return Self::array_of(Self::UInt),
                 "Array" => return Self::Array,
                 "Tag" => return Self::Tag,
                 "Unit" => return Self::Unit,
