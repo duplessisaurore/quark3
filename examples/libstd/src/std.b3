@@ -1904,6 +1904,22 @@
 @macro array_set (array, open, index, close, operator, rhs)
     @matches open ^\[$
     @matches close ^\]$
+    @matches operator ^\+=$
+    $array
+    dup
+    $index
+    dup
+    rotate
+    array.nth
+    $rhs
+    numeric.add
+    array.set
+    pop
+@end
+
+@macro array_set (array, open, index, close, operator, rhs)
+    @matches open ^\[$
+    @matches close ^\]$
     @matches operator ^-=$
     $array
     dup
