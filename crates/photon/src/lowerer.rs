@@ -3599,7 +3599,7 @@ fn assignment_macro(
             AssignmentTarget::Array { array_index } => format!(
                 "!std::array_set {} [ {} ] = {}",
                 block(lhs),
-                array_index,
+                block(&array_index),
                 block(code)
             ),
         });
@@ -3651,13 +3651,13 @@ fn assignment_macro(
             field_name,
         ),
         (TypeName::Int, AssignmentTarget::Array { array_index }) => {
-            format!("array_int_set {} [ {} ]", block(lhs), array_index,)
+            format!("array_int_set {} [ {} ]", block(lhs), block(&array_index),)
         }
         (TypeName::UInt, AssignmentTarget::Array { array_index }) => {
-            format!("array_uint_set {} [ {} ]", block(lhs), array_index,)
+            format!("array_uint_set {} [ {} ]", block(lhs), block(&array_index),)
         }
         (TypeName::Float, AssignmentTarget::Array { array_index }) => {
-            format!("array_float_set {} [ {} ]", block(lhs), array_index,)
+            format!("array_float_set {} [ {} ]", block(lhs), block(&array_index),)
         }
 
         // no valid ops for this type
