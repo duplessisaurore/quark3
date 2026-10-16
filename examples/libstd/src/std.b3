@@ -2434,6 +2434,18 @@
 
 @macro object_set (object, arrow, field, operator, rhs)
     @matches arrow ^->$
+    @matches operator ^\+=$
+    $object
+    dup
+    object.get $field
+    $rhs
+    numeric.add
+    object.set $field
+    pop
+@end
+
+@macro object_set (object, arrow, field, operator, rhs)
+    @matches arrow ^->$
     @matches operator ^-=$
     $object
     dup
