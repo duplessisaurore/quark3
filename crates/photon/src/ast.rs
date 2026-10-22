@@ -559,6 +559,9 @@ impl TypeName {
                 "Bool" => return Self::Bool,
                 // Boson3 strings (photon3 strings too) are UTF-8 byte arrays technically
                 "String" => return Self::array_of(Self::UInt),
+
+                // A char is always a UInt
+                "Char" => return Self::UInt,
                 "Array" => return Self::Array,
                 "Tag" => return Self::Tag,
                 "Unit" => return Self::Unit,

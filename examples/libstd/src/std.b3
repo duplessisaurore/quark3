@@ -1910,6 +1910,7 @@
     $index
     dup
     rotate
+    swap
     array.nth
     $rhs
     numeric.add
@@ -1926,6 +1927,7 @@
     $index
     dup
     rotate
+    swap
     array.nth
     $rhs
     numeric.sub
