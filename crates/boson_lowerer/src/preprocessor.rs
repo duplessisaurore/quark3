@@ -6,6 +6,14 @@ use std::collections::HashMap;
 
 use crate::errors::{LoweringError, LoweringErrorKind};
 
+/// One lowering local debug item
+#[derive(Debug)]
+pub struct LocalDebug {
+    pub func_name: String,
+    pub local_idx: u64,
+    pub local_name: String,
+}
+
 /// The actual lowerer itself.
 ///
 /// This is responsible for doing all the desugaring
@@ -32,6 +40,9 @@ pub struct BosonLowerer<'source> {
 
     // The last allocated global slot
     global_slot: u64,
+
+    // Debug tracking for optional debug output
+    pub debug_track: Vec<LocalDebug>,
 }
 
 /// A `Boson3` function whose locals count is computed by the lowerer.
@@ -69,11 +80,12 @@ impl<'source> BosonLowerer<'source> {
             source,
             out: Vec::new(),
             global_slot: 0,
+            debug_track: Vec::new(),
         }
     }
 
     /// Lower a complete `Boson3` source file to `Quark3` source.
-    pub fn lower(mut self) -> Result<String, LoweringError> {
+    pub fn lower(&mut self) -> Result<String, LoweringError> {
         // Collect all the global table elements into the `Lowerer`
         self.collect()?;
 
@@ -254,6 +266,11 @@ impl<'source> BosonLowerer<'source> {
 
                         // The local count has grown so we need to update the @fn line
                         self.out[function.line] = function.fn_line();
+                        self.debug_track.push(LocalDebug {
+                            func_name: function.name.clone(),
+                            local_idx: function.next_slot - 1,
+                            local_name: name.to_string(),
+                        })
                     }
                 }
 

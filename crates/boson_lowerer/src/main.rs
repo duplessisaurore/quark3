@@ -13,6 +13,7 @@
 //! `Boson3` also adds macros which are done by the `macroprocessor`
 
 use std::error::Error;
+use std::fmt::Write;
 
 pub mod errors;
 pub mod macro_scope_processor;
@@ -47,6 +48,10 @@ struct Cli {
     // Optional file to write the expanded macro output to before lowering
     #[arg(long, short)]
     expanded_output: Option<PathBuf>,
+
+    // Optional file to write debug locals map out to after lowering
+    #[arg(long, short)]
+    locals_map: Option<PathBuf>
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -92,7 +97,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Lower input source
-    let lowerer = BosonLowerer::new(&expanded);
+    let mut lowerer = BosonLowerer::new(&expanded);
     let lowered = lowerer.lower().unwrap_or_else(|e| {
         eprintln!("lowering error: {e}");
         process::exit(1);
@@ -109,6 +114,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         input_path.display(),
         output_path.display()
     );
+
+    // Write locals map if wanted
+    if let Some(local_map_path) = &cli.locals_map {
+        let mut locals_file_out = String::new();
+        for debug in lowerer.debug_track {
+            writeln!(locals_file_out, "[{}] ({}) {}", debug.func_name, debug.local_idx, debug.local_name)?;
+        }
+
+        fs::write(local_map_path, &locals_file_out).unwrap_or_else(|e| {
+            eprintln!("error writing {}: {e}", local_map_path.display());
+            process::exit(1);
+        });
+        println!(
+            "boson3 locals map written to {} -> {}",
+            input_path.display(),
+            local_map_path.display()
+        );
+    }
 
     Ok(())
 }

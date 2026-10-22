@@ -33,6 +33,10 @@ struct Cli {
     #[arg(long)]
     source_map: bool,
 
+    /// Write a locals map next to each boson3 lowered file if wanted
+    #[arg(long)]
+    local_map: bool,
+
     /// Verbose output or not
     #[arg(short, long)]
     verbose: bool,
@@ -179,6 +183,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     // lower
     let mut boson = Command::new("boson3");
     boson.arg(&linked_path).arg(&lowered_path);
+
+    // Output locals map if we want.
+    if cli.local_map {
+        boson.arg("--locals-map").arg(linked_path.with_added_extension("locals"));
+    }
 
     verbose_print(format!("collider3 >> running {:?}", boson), verbose);
     run(boson);
