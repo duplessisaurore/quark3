@@ -487,21 +487,6 @@ pub fn lower_modules(
                 ));
             }
 
-            // Must have exactly 0 parameters, else what the hell
-            // concrete args do we pass
-            if !signature.parameters.is_empty() {
-                return Err((
-                    index,
-                    PhotonErrorKind::error(
-                        PhotonErrorKind::NumArgumentCallMismatch {
-                            expected: 0,
-                            found: signature.parameters.len(),
-                        },
-                        item.span,
-                    ),
-                ));
-            }
-
             // And we can only ever have one entry across all modules, else kaboom
             if let Some(previous) = &user_entry {
                 return Err((
@@ -664,20 +649,30 @@ pub fn lower_modules(
             }
         };
 
-        // body of the setup function
-        let mut body = Vec::with_capacity(order.len() + 3);
-        body.push(format!("@fn {generated_name} ()"));
+        let signature = symbols.function(&entry.name).expect("entry was validated");
 
-        // we call all of the global setup functions
+        // we need to preserve entry arguments to main that can be provided by the vm caller
+        let parameters: Vec<String> = (0..signature.parameters.len())
+            .map(|index| format!("__photon3_entry_arg_{index}"))
+            .collect();
+
+        let mut body = Vec::with_capacity(order.len() + 3);
+        body.push(format!("@fn {generated_name} ({})", parameters.join(", "),));
+
+        // initialise globals before invoking the real entry from the user
         for index in order {
             body.push(format!("!std::call {} ( {{}} )", init_functions[index]));
         }
 
-        // and then the actual setup function
-        let signature = symbols.function(&entry.name).expect("entry was validated");
+        // forward the saved arguments in their original positional order
+        let arguments = parameters
+            .iter()
+            .map(|parameter| format!("!std::get {parameter}"))
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        // nothing gets actually returned from the main function, normalise
-        let call = format!("!std::call {} ( {{}} )", entry.name);
+        let call = format!("!std::call {} ( {} )", entry.name, block(&arguments),);
+
         body.push(if signature.return_type == TypeName::Void {
             call
         } else {
