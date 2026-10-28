@@ -348,6 +348,7 @@ go_return:
 | array.nth | nth | ArrayNth |
 | array.append | aap | ArrayAppend |
 | array.set | ast | ArraySet |
+| array.new.fill | anf | ArrayNewFill |
 
 ### Objects
 

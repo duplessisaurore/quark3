@@ -60,6 +60,7 @@ map_opcode! {
     "array.nth" = Opcode::ArrayNth,
     "array.append" = Opcode::ArrayAppend,
     "array.set" = Opcode::ArraySet,
+    "array.new.fill" = Opcode::ArrayNewFill,
     "object.new" = Opcode::ObjectNew,
     "object.set" = Opcode::ObjectSet,
     "object.get" = Opcode::ObjectGet,

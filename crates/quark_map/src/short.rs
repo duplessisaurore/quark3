@@ -60,6 +60,7 @@ map_opcode! {
     "nth" = Opcode::ArrayNth,
     "aap" = Opcode::ArrayAppend,
     "ast" = Opcode::ArraySet,
+    "anf" = Opcode::ArrayNewFill,
     "onw" = Opcode::ObjectNew,
     "ost" = Opcode::ObjectSet,
     "ogt" = Opcode::ObjectGet,
