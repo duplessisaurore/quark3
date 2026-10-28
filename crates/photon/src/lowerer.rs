@@ -2656,9 +2656,18 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         // Array literals can use the surrounding annotation or return type,
         // including when there are no elements from which to infer a type.
         let lowered = match &expression.value {
-            Expression::ArrayLiteral(elements) => {
-                self.lower_array_lit_expr(elements, context, expected_type.array_element_type())?
-            }
+            Expression::ArrayLiteral(elements) => self.lower_array_lit_expr(
+                elements,
+                None,
+                context,
+                expected_type.array_element_type(),
+            )?,
+            Expression::RepeatedArrayLiteral { elements, repeats } => self.lower_array_lit_expr(
+                elements,
+                Some(repeats.as_ref()),
+                context,
+                expected_type.array_element_type(),
+            )?,
             _ => self.lower_expression(expression, context)?,
         };
 
@@ -2834,7 +2843,10 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             }
             Expression::Name(name) => self.lower_name_expr(name, span, context)?,
             Expression::ArrayLiteral(elements) => {
-                self.lower_array_lit_expr(elements, context, None)?
+                self.lower_array_lit_expr(elements, None, context, None)?
+            }
+            Expression::RepeatedArrayLiteral { elements, repeats } => {
+                self.lower_array_lit_expr(elements, Some(repeats.as_ref()), context, None)?
             }
             Expression::Call {
                 callee,
@@ -3089,6 +3101,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     fn lower_array_lit_expr(
         &mut self,
         elements: &[Located<Expression>],
+        repeats: Option<&Located<Expression>>,
         context: &FunctionContext,
         expected_element_type: Option<&TypeName>,
     ) -> PhotonResult<LoweredExpression> {
@@ -3133,12 +3146,38 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             (None, Some(_)) => TypeName::Any,
         };
 
-        Ok(LoweredExpression::value(
+        let code = if let Some(repeats) = repeats {
+            // If we have a repeat, we use array.new.fill instead
+            // with some uint repeat count
+            let count = self.expect_lowered_expression_type(
+                repeats,
+                &TypeName::UInt,
+                context,
+                TypeMismatchSource::ArrayLiteralRepeatCount,
+            )?;
+
+            // Initial values, then the count, then repeat count.
+            let initial_values = values
+                .iter()
+                .map(|value| value.code.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "{initial_values}\n!std::uint {}\n{}\narray.new.fill",
+                values.len(),
+                count.code
+            )
+        } else {
+            // Else normal array.
             format!(
                 "!std::array {} ( {} )",
                 values.len(),
                 lowered_exprs_block(&values)
-            ),
+            )
+        };
+
+        Ok(LoweredExpression::value(
+            code,
             TypeName::array_of(element_type),
         ))
     }

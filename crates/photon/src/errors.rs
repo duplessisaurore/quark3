@@ -871,6 +871,9 @@ pub enum TypeMismatchSource {
     /// In the position of an array literal expression
     ArrayLiteralExpression,
 
+    /// In the position of the repetition count of a repeated array literal
+    ArrayLiteralRepeatCount,
+
     /// As the argument to this intrinsic call
     IntrinsicArgument { intrinsic: Intrinsic },
 
@@ -999,6 +1002,9 @@ impl Display for TypeMismatchSource {
                     f,
                     "an array being constructed by an array literal expression"
                 )
+            }
+            TypeMismatchSource::ArrayLiteralRepeatCount => {
+                write!(f, "the repetition count of a repeated array literal, e.g [<values> ; <repetition_count>]")
             }
             TypeMismatchSource::IntrinsicArgument { intrinsic } => {
                 write!(f, "as the argument to the intrinsic `{intrinsic}`")

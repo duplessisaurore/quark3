@@ -1853,31 +1853,48 @@ impl<'tokens> Parser<'tokens> {
         }
     }
 
-    /// Parses the remaining elements of an array literal
-    /// after the opening `[`
-    ///
-    /// The start should be the location where the `[` is.
+    /// Parses `[a, b]`, `[a, b; repeats]`, or `[; repeats]` after `[`.
+    /// 
+    /// This parses all possible array literal expressions basically !
     fn parse_array_literal_after_open(
         &mut self,
         start: usize,
     ) -> PhotonResult<Located<Expression>> {
-        // parse the array elements set
-        let elements = if self.eat(&TokenKind::RightBracket) {
-            Vec::new()
+        let mut elements = Vec::new();
+
+        // Must be followed by a right bracket (and not semicolon)
+        if !self.check(&TokenKind::RightBracket) && !self.check(&TokenKind::Semicolon) {
+            loop {
+                elements.push(self.parse_expression()?);
+
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+
+                // The end of the array is ] ;, which is illegal when we have a trailing comma as another
+                // element should follow!
+                if self.check(&TokenKind::RightBracket) || self.check(&TokenKind::Semicolon) {
+                    return Err(PhotonErrorKind::error(
+                        PhotonErrorKind::UnexpectedEndOfArrayElemsFollowingComma,
+                        self.current_span(),
+                    ));
+                }
+            }
+        }
+
+        // Check if we are a repeated array literal or a normal array literal.
+        let array = if self.eat(&TokenKind::Semicolon) {
+            let repeats = Box::new(self.parse_expression()?);
+            self.expect(&TokenKind::RightBracket)?;
+            Expression::RepeatedArrayLiteral { elements, repeats }
         } else {
-            self.parse_delimited_list(
-                &TokenKind::RightBracket,
-                PhotonErrorKind::UnexpectedEndOfArrayElemsFollowingComma,
-                |parser| parser.parse_expression(),
-            )?
+            self.expect(&TokenKind::RightBracket)?;
+            Expression::ArrayLiteral(elements)
         };
 
-        // Both paths have consumed the closing ].
-        let end = self.previous_span().end;
-
         Ok(Located::new(
-            Expression::ArrayLiteral(elements),
-            (start..end).into(),
+            array,
+            (start..self.previous_span().end).into(),
         ))
     }
 }

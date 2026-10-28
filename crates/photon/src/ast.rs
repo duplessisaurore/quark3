@@ -254,6 +254,10 @@ pub enum Expression {
     StringLiteral(String),
     Name(QualifiedName),
     ArrayLiteral(Vec<Located<Expression>>),
+    RepeatedArrayLiteral {
+        elements: Vec<Located<Expression>>,
+        repeats: Box<Located<Expression>>,
+    },
     Call {
         callee: Box<Located<Expression>>,
         type_arguments: Vec<TypeName>,

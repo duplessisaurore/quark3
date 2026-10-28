@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "photon"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "clap",
  "miette",
@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "quark_asm"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "hashbrown 0.17.1",
  "lepton3",
@@ -584,7 +584,7 @@ dependencies = [
 
 [[package]]
 name = "quark_map"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "lepton3",
 ]
