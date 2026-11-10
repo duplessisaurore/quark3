@@ -68,6 +68,10 @@ pub enum PhotonErrorKind {
     /// was found here
     UnexpectedEndOfTypeArgsFollowingComma,
 
+    /// Expected another type parameter to follow since a comma
+    /// was found here
+    UnexpectedEndOfFunctionTypeParamsFollowingComma,
+
     /// Expected another array element follow since a comma
     /// was found here
     UnexpectedEndOfArrayElemsFollowingComma,
@@ -245,8 +249,26 @@ pub enum PhotonErrorKind {
     /// Invalid assignment target, non-array, object, local or global
     InvalidAssignmentTarget,
 
-    /// Invalid call target, it is a non-name
-    InvalidNonNameCallTarget,
+    /// Invalid function reference target, it named something which was not a function
+    InvalidFunctionReferenceTarget,
+
+    /// Found the usage of a function reference, in which not all
+    /// type arguments were not explicitly named
+    FunctionReferenceTypeArgumentCount {
+        name: QualifiedName,
+        expected: usize,
+        found: usize,
+    },
+
+    /// An indirect call attempted on a non-function value, it must
+    /// be an explicit Type -> Type function value.
+    NonFunctionCallTarget { 
+        found: TypeName 
+    },
+
+    /// Type arguments only specialise declared functions, not function values,
+    /// as it doesn't really make sense to do so on a binding but not the definition
+    TypeArgumentsOnIndirectCall,
 
     /// Invalid conversion type for specific intrinsic
     InvalidTypeForConversionIntrinsic {
@@ -295,12 +317,26 @@ pub enum PhotonErrorKind {
     /// E.g for Queue<T> we are supplying Int which doesnt fit
     NonAppliedSuppliedTypeForDeclaredSuppliedType { supplied: TypeName },
 
+    /// When trying to infer types against some declared function type
+    /// the supplied type is not a function type, but rather some other
+    /// concrete type.
+    ///
+    /// E.g for Function T -> T we are supplying Int which doesnt fit
+    NonFunctionSuppliedTypeForDeclaredSuppliedType { supplied: TypeName },
+
     /// When trying to infer types against some declared applied type
     /// the supplied types generic parameters mismatch in the number of arguments
     /// against the declared type
     AppliedTypeInferenceArgNMismatch {
         declared_argn: usize,
         supplied_argn: usize,
+    },
+
+    /// When trying to infer types against some parameter types in a function type
+    /// the supplied types parameters are not the same amount as the declared
+    FunctionTypeInferenceParamNMismatch {
+        declared_paramn: usize,
+        supplied_paramn: usize,
     },
 
     /// Unable to infer/find this type parameter after explicit and inferred type substitution
@@ -427,6 +463,12 @@ impl Display for PhotonErrorKind {
                 write!(
                     f,
                     "unexpected right `]` here when more type arguments should have followed after `,`"
+                )
+            }
+            Self::UnexpectedEndOfFunctionTypeParamsFollowingComma => {
+                write!(
+                    f,
+                    "unexpected right `)` here when more function type parameters should have followed after `,`"
                 )
             }
             Self::UnexpectedDirective { found, expected } => {
@@ -674,11 +716,17 @@ impl Display for PhotonErrorKind {
                     "invalid assignment target, assignment target must be a local, global, object field, or array element"
                 )
             }
-            Self::InvalidNonNameCallTarget => {
-                write!(
-                    f,
-                    "invalid call target, call targets must be a direct name (function/object constructor)."
-                )
+            Self::InvalidFunctionReferenceTarget => {
+                write!(f, "invalid explicit function reference, an explicit function reference must name a declared function")
+            }
+            Self::FunctionReferenceTypeArgumentCount { name, expected, found } => {
+                write!(f, "function reference `{name}` requires {expected} concrete type arguments, found {found}")
+            }
+            Self::NonFunctionCallTarget { found } => {
+                write!(f, "cannot indirectly call a value of non-function type `{found}`")
+            }
+            Self::TypeArgumentsOnIndirectCall => {
+                write!(f, "bound function values for indirect calls cannot be specialised with further type arguments")
             }
             Self::InvalidTypeForConversionIntrinsic { intrinsic, found } => {
                 write!(
@@ -735,13 +783,28 @@ impl Display for PhotonErrorKind {
                     "expected some applied type Applied<Args> to be provided for type inference, instead found `{supplied}`"
                 )
             }
+           Self::NonFunctionSuppliedTypeForDeclaredSuppliedType { supplied } => {
+                write!(
+                    f,
+                    "expected some function type Params -> Ret to be provided for type inference, instead found `{supplied}`"
+                )
+            }
             Self::AppliedTypeInferenceArgNMismatch {
                 declared_argn,
                 supplied_argn,
             } => {
                 write!(
                     f,
-                    "expected supplied type argument count `{supplied_argn}` to match declared type argument count `{declared_argn}` during type inference"
+                    "expected supplied type argument count `{supplied_argn}` to match declared type argument count `{declared_argn}` during applied type inference"
+                )
+            }
+            Self::FunctionTypeInferenceParamNMismatch {
+                declared_paramn,
+                supplied_paramn,
+            } => {
+                write!(
+                    f,
+                    "expected supplied type parameter count `{supplied_paramn}` to match declared type parameter count `{declared_paramn}` during function type inference"
                 )
             }
             Self::UnknownObjectTypeParam {
@@ -886,6 +949,12 @@ pub enum TypeMismatchSource {
     /// As the arguments to a function call
     FunctionCallArguments { name: QualifiedName },
 
+    /// As the function value in an indirect call
+    IndirectCallTarget,
+
+    /// As an argument to an indirect function call
+    IndirectCallArgument,
+
     /// As this field of to an object constructor
     ObjectConstructorField { name: QualifiedName, field: String },
 
@@ -1023,6 +1092,12 @@ impl Display for TypeMismatchSource {
             }
             TypeMismatchSource::FunctionCallArguments { name } => {
                 write!(f, "arguments to the function `{name}`")
+            }
+            TypeMismatchSource::IndirectCallTarget => {
+                write!(f, "a function value being called indirectly")
+            }
+            TypeMismatchSource::IndirectCallArgument => {
+                write!(f, "an argument to an indirect function call")
             }
             TypeMismatchSource::ObjectConstructorField { name, field } => {
                 write!(

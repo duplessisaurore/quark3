@@ -746,8 +746,34 @@ impl<'tokens> Parser<'tokens> {
 
     /// Parse a type at the current position
     fn parse_type(&mut self) -> PhotonResult<TypeName> {
-        let name = self.parse_qualified_name()?;
+        // Parenthesis found here
+        //
+        // This begins a function type that takes multiple parameters
+        if self.eat(&TokenKind::LeftParen) {
+            // parse the lhs (Params)
+            let parameters = if self.eat(&TokenKind::RightParen) {
+                Vec::new()
+            } else {
+                self.parse_delimited_list(
+                    &TokenKind::RightParen,
+                    PhotonErrorKind::UnexpectedEndOfTypeArgsFollowingComma,
+                    |parser| parser.parse_type(),
+                )?
+            };
 
+            self.expect(&TokenKind::Arrow)?;
+
+            // rhs function type return value
+            let return_type = self.parse_type()?;
+            return Ok(TypeName::Function {
+                parameters,
+                return_type: Box::new(return_type),
+            });
+        }
+
+        // In this case we have a simple type, no (Type, Type) here
+        // which can be some normal Type or a Type -> Type
+        let name = self.parse_qualified_name()?;
         let parsed = self.type_from_qualified_name(name);
 
         // type is followed by [ so it has type arguments
@@ -755,6 +781,15 @@ impl<'tokens> Parser<'tokens> {
             let arguments = self.parse_type_arguments_after_open()?;
 
             return Ok(parsed.applied(arguments));
+        }
+
+        // If followed by an arrow, we have a function type!
+        // this is like Type -> <other type>
+        if self.eat(&TokenKind::Arrow) {
+            return Ok(TypeName::Function {
+                parameters: vec![parsed],
+                return_type: Box::new(self.parse_type()?),
+            });
         }
 
         Ok(parsed)
@@ -1659,12 +1694,29 @@ impl<'tokens> Parser<'tokens> {
 
         // (postfix op)
         loop {
-            // foo(...)
-            // this is a function call.
-
             // explicit type arguments that may be for this function call
             let type_arguments = self.parse_optional_call_type_arguments()?;
 
+            // foo::[Type]
+            // this is a function reference with some explicit type args
+            if let Some(type_arguments) = type_arguments.as_ref()
+                && !self.check(&TokenKind::LeftParen)
+            {
+                let end = self.previous_span().end;
+
+                expression = Located::new(
+                    Expression::FunctionReference {
+                        callee: Box::new(expression),
+                        type_arguments: type_arguments.clone(),
+                    },
+                    (start..end).into(),
+                );
+
+                continue;
+            }
+
+            // foo(...)
+            // this is a function call.
             if type_arguments.is_some() || self.check(&TokenKind::LeftParen) {
                 // parse all arguments to foo/some
                 let arguments = self.parse_argument_list()?;
@@ -1854,7 +1906,7 @@ impl<'tokens> Parser<'tokens> {
     }
 
     /// Parses `[a, b]`, `[a, b; repeats]`, or `[; repeats]` after `[`.
-    /// 
+    ///
     /// This parses all possible array literal expressions basically !
     fn parse_array_literal_after_open(
         &mut self,

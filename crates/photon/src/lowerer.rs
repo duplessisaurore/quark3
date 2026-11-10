@@ -182,6 +182,12 @@ pub struct Lowerer<'symbols, 'source_map, 'module, 'monomorphs> {
 struct LoweringDependencies {
     global_reads: HashSet<QualifiedName>,
     calls: HashSet<QualifiedName>,
+
+    /// Functions which are referenced by name but not called directly
+    /// this is technically pretty conservative and may reject actual valid
+    /// global initialisation orders, but its probably not very good if you
+    /// have such a scenario anyway? use escape hatches like b3<> (unsafe) if you are SURE
+    references: HashSet<QualifiedName>,
 }
 
 /// A fully lowered global initialiser together with its dependencies
@@ -369,6 +375,14 @@ impl Monomorphisations {
                 } => {
                     types.push(constructor.as_ref());
                     types.extend(arguments);
+                }
+                // maybe will contain an unresolved ret-type/param-type
+                TypeName::Function {
+                    parameters,
+                    return_type,
+                } => {
+                    types.extend(parameters);
+                    types.push(return_type.as_ref());
                 }
                 _ => {}
             }
@@ -708,9 +722,14 @@ fn expand_global_reads(
     // All of the global reads we start with are the ones already known.
     let mut reads = initial.global_reads.clone();
 
-    // And a work-set for all the functions called by the initialiser which
-    // we look up in functions.
-    let mut pending: Vec<QualifiedName> = initial.calls.iter().cloned().collect();
+    // And a work-set for all the functions called and referenced
+    // by the initialiser which we look up in functions.
+    let mut pending: Vec<QualifiedName> = initial
+        .calls
+        .iter()
+        .chain(initial.references.iter())
+        .cloned()
+        .collect();
 
     // Dont-revisit a function we already visited else we get infinite recursion issues
     let mut visited = HashSet::new();
@@ -724,6 +743,7 @@ fn expand_global_reads(
         if let Some(dependencies) = functions.get(&function) {
             reads.extend(dependencies.global_reads.iter().cloned());
             pending.extend(dependencies.calls.iter().cloned());
+            pending.extend(dependencies.references.iter().cloned());
         }
     }
     reads
@@ -1396,6 +1416,18 @@ impl SymbolTable {
                     .iter()
                     .map(|argument| self.resolve_type_in_module(argument, module, span))
                     .collect::<PhotonResult<Vec<_>>>()?,
+            }),
+            TypeName::Function {
+                parameters,
+                return_type,
+            } => Ok(TypeName::Function {
+                // resolved the parameter & return types to this function type
+                parameters: parameters
+                    .iter()
+                    .map(|param_type| self.resolve_type_in_module(param_type, module, span))
+                    .collect::<PhotonResult<Vec<_>>>()?,
+
+                return_type: Box::new(self.resolve_type_in_module(return_type, module, span)?),
             }),
 
             other => Ok(other.clone()),
@@ -2395,11 +2427,21 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 type_arguments,
                 arguments,
             } => {
+                // If the callee is an indirect call target, attempt to lower it as that
+                // which would be things that are not normally tail callable (mainly name producing exprs)
+                if self.is_indirect_call_target(callee, span, context)? {
+                    return self.lower_indirect_tail_call(
+                        callee,
+                        type_arguments,
+                        arguments,
+                        span,
+                        expected_return_type,
+                        context,
+                    );
+                };
+
                 let Expression::Name(function_name) = &callee.value else {
-                    // we don't handle name producing expressions such as
-                    // (function_name)(args), for simplicity. as this would be pretty annoying
-                    // to manually consider here, lol just use proper calls.
-                    return Ok(None);
+                    unreachable!("this should only have direct calls");
                 };
 
                 // intrinsics which we cant directly call
@@ -2853,6 +2895,15 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 type_arguments,
                 arguments,
             } => self.lower_call_expr(callee, type_arguments, arguments, span, context)?,
+            Expression::FunctionReference {
+                callee,
+                type_arguments,
+            } => self.lower_function_reference_from_expression(
+                callee,
+                type_arguments,
+                span,
+                context,
+            )?,
             Expression::FieldAccess { receiver, field } => {
                 self.lower_field_access(receiver, field, span, context)?
             }
@@ -2940,12 +2991,127 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             ));
         }
 
-        // Couldn't be found
+        // If this refers to a function name, then lower it as a reference to that function instead.
+        let function_name =
+            self.symbols
+                .resolve_name(name, self.module, SymbolKind::Function, span)?;
+
+        if self.symbols.function(&function_name).is_some() {
+            return self.lower_function_reference(name, &[], span, context);
+        }
+
         Err(PhotonErrorKind::error(
             PhotonErrorKind::UnknownName {
                 name: name.to_string(),
             },
             span,
+        ))
+    }
+
+    /// Lower a function reference from a callee expression
+    fn lower_function_reference_from_expression(
+        &mut self,
+        callee: &Located<Expression>,
+        type_arguments: &[TypeName],
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        // Must be a name
+        let Expression::Name(name) = &callee.value else {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::InvalidFunctionReferenceTarget,
+                span,
+            ));
+        };
+
+        self.lower_function_reference(name, type_arguments, span, context)
+    }
+
+    /// Lower the current name expression in this position as a reference
+    /// to a function
+    fn lower_function_reference(
+        &mut self,
+        name: &QualifiedName,
+        type_arguments: &[TypeName],
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        // If the name is an unqualified local already or a unit, we cant
+        // refer to a function of the same name (invalid), else a name can gain multiple meanings
+        // which is bad
+        if name.is_unqualified()
+            && (context.locals.contains_key(name.last()) || name.last() == "unit")
+        {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::InvalidFunctionReferenceTarget,
+                span,
+            ));
+        }
+
+        // Grab the signature of the function out from the symbol table
+        let qualified = self
+            .symbols
+            .resolve_name(name, self.module, SymbolKind::Function, span)?;
+
+        let signature = self.symbols.function(&qualified).ok_or_else(|| {
+            PhotonErrorKind::error(
+                PhotonErrorKind::UnknownFunction {
+                    name: qualified.clone(),
+                },
+                span,
+            )
+        })?;
+
+        // For a function reference we expect to have the same number of type arguments
+        // as the type parameters, there is no generic function interpretation here
+        if type_arguments.len() != signature.type_parameters.len() {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::FunctionReferenceTypeArgumentCount {
+                    name: qualified,
+                    expected: signature.type_parameters.len(),
+                    found: type_arguments.len(),
+                },
+                span,
+            ));
+        }
+
+        // find the actual concrete arguments now based on the current scope
+        let concrete_arguments = type_arguments
+            .iter()
+            .map(|arg_type| self.resolve_type(arg_type, context, span))
+            .collect::<PhotonResult<Vec<_>>>()?;
+
+        // Substitute all parameters
+        let substitutions: TypeSubstitutionMap = signature
+            .type_parameters
+            .iter()
+            .cloned()
+            .zip(concrete_arguments.iter().cloned())
+            .collect();
+
+        let function_type = TypeName::Function {
+            parameters: signature
+                .parameters
+                .iter()
+                .map(|ty| ty.substitute(&substitutions))
+                .collect(),
+            return_type: Box::new(signature.return_type.substitute(&substitutions)),
+        };
+
+        // Register a new monomorphisation if necessary and find the actual
+        // emitted name for the function we are grabbing the index of which will become this ref
+        let emitted_name = if concrete_arguments.is_empty() {
+            signature.name.clone()
+        } else {
+            self.monomorphisations
+                .register(&signature.name, concrete_arguments, span)?
+        };
+
+        // this function references this indirect call
+        self.dependencies.references.insert(emitted_name.clone());
+        Ok(LoweredExpression::value(
+            format!("@push.fn {emitted_name}"),
+            function_type,
         ))
     }
 
@@ -3182,6 +3348,34 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         ))
     }
 
+    /// Determine whether a call's target is function as a value rather
+    /// than just direct name,
+    ///
+    /// essentially whether or not this "callee" counts as an indirect call-type expression
+    fn is_indirect_call_target(
+        &self,
+        callee: &Located<Expression>,
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<bool> {
+        // If its a name type expression..
+        let Expression::Name(name) = &callee.value else {
+            return Ok(true);
+        };
+
+        // Or if its a local with a function reference value potentially
+        if name.is_unqualified() && context.locals.contains_key(name.last()) {
+            return Ok(true);
+        }
+
+        // Or a global
+        let global_name = self
+            .symbols
+            .resolve_name(name, self.module, SymbolKind::Global, span)?;
+
+        Ok(self.symbols.global(&global_name).is_some())
+    }
+
     /// Lowers one call expression in the current context of a function
     fn lower_call_expr(
         &mut self,
@@ -3191,12 +3385,13 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         span: SourceSpan,
         context: &FunctionContext,
     ) -> PhotonResult<LoweredExpression> {
-        // Calls are only permitted to straight up name callees (e.g) my_func()
+        // Potential indirect call
+        if self.is_indirect_call_target(callee, span, context)? {
+            return self.lower_indirect_call(callee, type_arguments, arguments, span, context);
+        }
+
         let Expression::Name(callee_name) = &callee.value else {
-            return Err(PhotonErrorKind::error(
-                PhotonErrorKind::InvalidNonNameCallTarget,
-                span,
-            ));
+            unreachable!("this should only have direct calls");
         };
 
         // Validate if the call is an intrinsic or not, and lower it if it is.
@@ -3281,6 +3476,109 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         );
 
         Ok(resolved_return_type.normalise_to_drop(&call_code))
+    }
+
+    /// Invoke a function as a value specifically through an indirect call.
+    fn lower_indirect_call(
+        &mut self,
+        callee: &Located<Expression>,
+        type_arguments: &[TypeName],
+        arguments: &[Located<Expression>],
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<LoweredExpression> {
+        let (operands, return_type) =
+            self.lower_indirect_call_arguments(callee, type_arguments, arguments, span, context)?;
+
+        Ok(return_type.normalise_to_drop(&format!("{operands}\ncall @raw")))
+    }
+
+    /// Invoke a function as a value specifically through an indirect call
+    /// using tail call instead of normal call
+    fn lower_indirect_tail_call(
+        &mut self,
+        callee: &Located<Expression>,
+        type_arguments: &[TypeName],
+        arguments: &[Located<Expression>],
+        span: SourceSpan,
+        expected_return_type: &TypeName,
+        context: &FunctionContext,
+    ) -> PhotonResult<Option<String>> {
+        let (operands, return_type) =
+            self.lower_indirect_call_arguments(callee, type_arguments, arguments, span, context)?;
+
+        // Check if this tail call return type matches for the indrect call,
+        // otherwise we cant tail call this indirect function call
+        if !tail_call_return_type_matches(expected_return_type, &return_type) {
+            return Ok(None);
+        }
+
+        Ok(Some(format!("{operands}\ntail.call @raw")))
+    }
+
+    /// Type-check an indirect call and lower all of its arguments
+    /// for this indirect call
+    ///
+    /// This essentially will just lower all the args out and return
+    /// the code for that, alongside the indirect call's expected return type
+    ///
+    /// The return is of the type (<lowered arguments>, <return type>)
+    fn lower_indirect_call_arguments(
+        &mut self,
+        callee: &Located<Expression>,
+        type_arguments: &[TypeName],
+        arguments: &[Located<Expression>],
+        span: SourceSpan,
+        context: &FunctionContext,
+    ) -> PhotonResult<(String, TypeName)> {
+        if !type_arguments.is_empty() {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::TypeArgumentsOnIndirectCall,
+                span,
+            ));
+        }
+
+        // The callee should lower to some indirect call type expression
+        let callee = self.expect_lowered_expression_value(
+            callee,
+            context,
+            TypeMismatchSource::IndirectCallTarget,
+        )?;
+
+        let TypeName::Function {
+            parameters,
+            return_type,
+        } = &callee.value_type
+        else {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::NonFunctionCallTarget {
+                    found: callee.value_type.clone(),
+                },
+                span,
+            ));
+        };
+
+        // Arg count should match..
+        expect_argument_count(parameters.len(), arguments.len(), span)?;
+
+        // Lower each argument with the expected type
+        let values =
+            self.lower_arguments(arguments, context, TypeMismatchSource::IndirectCallArgument)?;
+            
+        for (expected, actual) in parameters.iter().zip(values.iter()) {
+            expect_type_accepts(
+                expected,
+                &actual.value_type,
+                TypeMismatchSource::IndirectCallArgument,
+                span,
+            )?;
+        }
+
+        // Lower arguments down to code
+        let mut pieces: Vec<&str> = values.iter().map(|value| value.code.as_str()).collect();
+        pieces.push(&callee.code);
+
+        Ok((pieces.join("\n"), return_type.as_ref().clone()))
     }
 
     /// Lowers a potential intrinsic call in the current context of a function
@@ -4029,6 +4327,46 @@ fn infer_type_substitution_map(
                 map.insert(parameter.clone(), supplied_type.clone());
                 Ok(())
             }
+        }
+
+        // Function so for e.x T -> T
+        // if putting in a Int -> Int should fill T as Int
+        TypeName::Function {
+            parameters,
+            return_type,
+        } => {
+            // Extract inner types
+            let TypeName::Function {
+                parameters: supplied_parameters,
+                return_type: supplied_return_type,
+            } = supplied_type
+            else {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::NonFunctionSuppliedTypeForDeclaredSuppliedType {
+                        supplied: supplied_type.clone(),
+                    },
+                    span,
+                ));
+            };
+
+            // Counts should match for parameters
+            if parameters.len() != supplied_parameters.len() {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::FunctionTypeInferenceParamNMismatch {
+                        declared_paramn: parameters.len(),
+                        supplied_paramn: supplied_parameters.len(),
+                    },
+                    span,
+                ));
+            }
+
+            // infer all param types now that counts match
+            for (expected, actual) in parameters.iter().zip(supplied_parameters) {
+                infer_type_substitution_map(expected, actual, map, span, source.clone())?;
+            }
+
+            // infer return type
+            infer_type_substitution_map(return_type, supplied_return_type, map, span, source)
         }
 
         // Applied so for e.x Queue<T>,

@@ -75,6 +75,13 @@ pub enum TypeName {
         constructor: Box<TypeName>,
         arguments: Vec<TypeName>,
     },
+
+    /// A function which takes some Type Type and returns Type
+    /// of the form (Type, Type) -> Type
+    Function {
+        parameters: Vec<TypeName>,
+        return_type: Box<TypeName>,
+    },
 }
 
 /// Substitution map, this maps all of the generic parameters
@@ -262,6 +269,10 @@ pub enum Expression {
         callee: Box<Located<Expression>>,
         type_arguments: Vec<TypeName>,
         arguments: Vec<Located<Expression>>,
+    },
+    FunctionReference {
+        callee: Box<Located<Expression>>,
+        type_arguments: Vec<TypeName>,
     },
     FieldAccess {
         receiver: Box<Located<Expression>>,
@@ -547,6 +558,27 @@ impl fmt::Display for TypeName {
                     .collect::<Vec<_>>()
                     .join(",")
             ),
+            Self::Function { parameters, return_type } => {
+                match parameters.as_slice() {
+                    // Only one parameter Type
+                    [only] if !matches!(only, TypeName::Function { .. }) => {
+                        write!(f, "{only}")?
+                    }
+
+                    // Multiple parameters, these are (Type, Type)
+                    _ => write!(
+                        f,
+                        "({})",
+                        parameters.iter()
+                            .map(TypeName::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )?,
+                }
+
+                // Parameters -> Return Type
+                write!(f, " -> {return_type}")
+            }
         }
     }
 }
@@ -653,6 +685,12 @@ impl TypeName {
                     .collect(),
             },
 
+            // need to canonicalise all parameters and the return type
+            TypeName::Function { parameters, return_type } => TypeName::Function {
+                parameters: parameters.iter().map(|param_type| param_type.canonicalise(current_namespace)).collect(),
+                return_type: Box::new(return_type.canonicalise(current_namespace)),
+            },
+
             // This doesn't need to be namespaced because its a param/local rather than
             // a seperate declaration of some type
             TypeName::GenericParameter(name) => TypeName::GenericParameter(name.clone()),
@@ -706,6 +744,12 @@ impl TypeName {
                     .collect(),
             },
 
+            // need to substitute into parameters and return type
+            TypeName::Function { parameters, return_type } => TypeName::Function {
+                parameters: parameters.iter().map(|param_type| param_type.substitute(substitution)).collect(),
+                return_type: Box::new(return_type.substitute(substitution)),
+            },
+
             // No substitution needed here.
             other => other.clone(),
         }
@@ -715,6 +759,10 @@ impl TypeName {
     pub fn contains_generic_parameter(&self) -> bool {
         match self {
             TypeName::GenericParameter(_) => true,
+            TypeName::Function { parameters, return_type } => {
+                parameters.iter().any(TypeName::contains_generic_parameter)
+                    || return_type.contains_generic_parameter()
+            }
             TypeName::Applied {
                 constructor,
                 arguments,
