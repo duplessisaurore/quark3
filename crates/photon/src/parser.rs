@@ -1359,7 +1359,7 @@ impl<'tokens> Parser<'tokens> {
     /// Parses a conditional binary operator (condition ? true_expr : false_expr)
     fn parse_conditional(&mut self) -> PhotonResult<Located<Expression>> {
         // condition
-        let condition = self.parse_pipeline()?;
+        let condition = self.parse_logical_or()?;
 
         // ?
         if !self.eat(&TokenKind::Question) {
@@ -1389,7 +1389,7 @@ impl<'tokens> Parser<'tokens> {
     /// Parses a pipeline operator (left |> right)
     fn parse_pipeline(&mut self) -> PhotonResult<Located<Expression>> {
         // left side
-        let mut left = self.parse_logical_or()?;
+        let mut left = self.parse_shift()?;
 
         loop {
             // We may have multiple newlines following our left side before the pipeline...
@@ -1565,7 +1565,7 @@ impl<'tokens> Parser<'tokens> {
     /// Parses a comparison binary operator
     fn parse_comparison(&mut self) -> PhotonResult<Located<Expression>> {
         // left side
-        let mut left = self.parse_shift()?;
+        let mut left = self.parse_pipeline()?;
 
         // potentai lright
         loop {
@@ -1587,7 +1587,7 @@ impl<'tokens> Parser<'tokens> {
             };
 
             // must be followed by right side
-            let right = self.parse_shift()?;
+            let right = self.parse_pipeline()?;
 
             left = make_binary(left, operator, right);
         }
