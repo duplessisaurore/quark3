@@ -2480,18 +2480,22 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                     expression.span,
                 )?;
 
-                // lower arguments
-                let arguments = self.lower_arguments(
-                    arguments,
-                    context,
-                    TypeMismatchSource::TailCallArguments,
-                )?;
-
                 // resolve type arguments
                 let explicit_type_arguments = type_arguments
                     .iter()
                     .map(|explicit_type| self.resolve_type(explicit_type, context, span))
                     .collect::<PhotonResult<Vec<_>>>()?;
+
+                // lower arguments
+                let arguments = self.lower_arguments_for_signature(
+                    signature,
+                    &explicit_type_arguments,
+                    &[],
+                    arguments,
+                    span,
+                    context,
+                    TypeMismatchSource::TailCallArguments,
+                )?;
 
                 // types of arguments
                 let actual_types = arguments
@@ -2560,19 +2564,23 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
 
                 // ensure the surface arg count matches the arg counts
                 expect_argument_count(expected_argument_count, arguments.len(), expression.span)?;
-
-                // lower arguments
-                let arguments = self.lower_arguments(
-                    arguments,
-                    context,
-                    TypeMismatchSource::TailCallMethodArguments,
-                )?;
-
+                
                 // resolve type arguments
                 let explicit_type_arguments = type_arguments
                     .iter()
                     .map(|explicit_type| self.resolve_type(explicit_type, context, span))
                     .collect::<PhotonResult<Vec<_>>>()?;
+
+                // lower arguments
+                let arguments = self.lower_arguments_for_signature(
+                    signature,
+                    &explicit_type_arguments,
+                    &[receiver.value_type.clone()],
+                    arguments,
+                    span,
+                    context,
+                    TypeMismatchSource::TailCallMethodArguments,
+                )?;
 
                 // types of arguments
                 let mut actual_types = Vec::with_capacity(arguments.len() + 1);
@@ -2609,13 +2617,13 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
     /// concrete arguments of the current function instance.
     fn resolve_type(
         &self,
-        ty: &TypeName,
+        to_resolve_type: &TypeName,
         context: &FunctionContext,
         span: SourceSpan,
     ) -> PhotonResult<TypeName> {
         Ok(self
             .symbols
-            .resolve_type_in_module(ty, self.module, span)?
+            .resolve_type_in_module(to_resolve_type, self.module, span)?
             .substitute(&context.substitution))
     }
 
@@ -2665,6 +2673,196 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             .collect()
     }
 
+    /// Whether an argument is an unspecialised generic function reference that cannot
+    /// yet be turned into a concrete value
+    ///
+    /// This basically checks if we have been provided a function reference of some kind
+    /// and not all the types have been specialised into a real concrete type, returning
+    /// true if both conditions are met
+    /// 
+    /// Types which meet this criteria should be deferred in inferrence until they can
+    /// be properly specialised
+    fn function_type_needs_contextual_inferrence(
+        &self,
+        argument: &Located<Expression>,
+        context: &FunctionContext,
+    ) -> PhotonResult<bool> {
+        // Grab the name of the function reference and the total current number of
+        // explicit types passed
+        let (name, explicit_count) = match &argument.value {
+            // function
+            Expression::Name(name) => (name, 0),
+
+            // function::[explicit]
+            Expression::FunctionReference {
+                callee,
+                type_arguments,
+            } => match &callee.value {
+                Expression::Name(name) => (name, type_arguments.len()),
+                _ => return Ok(false),
+            },
+
+            _ => return Ok(false),
+        };
+
+        // if this is in the current locals of the function or "unit" (special placeholder)
+        // then it cant be an unspecialised function since locals take priority
+        if name.is_unqualified()
+            && (context.locals.contains_key(name.last()) || name.last() == "unit")
+        {
+            return Ok(false);
+        }
+
+        // same check for globals
+        let global_name =
+            self.symbols
+                .resolve_name(name, self.module, SymbolKind::Global, argument.span)?;
+
+        if self.symbols.global(&global_name).is_some() {
+            return Ok(false);
+        }
+
+        // else qualify the real function from the symbol table
+        let function_name =
+            self.symbols
+                .resolve_name(name, self.module, SymbolKind::Function, argument.span)?;
+
+        // and check if we are missing parameters for specialisation
+        Ok(self
+            .symbols
+            .function(&function_name)
+            .is_some_and(|signature| explicit_count < signature.type_parameters.len()))
+    }
+
+    /// Lower all the arguments for a function signature down into an expression
+    /// that produces all of the arguments.
+    /// 
+    /// This also infers type parameters in both the signature and the arguments in
+    /// both ways, as opposed to the normal lower arguments, and handles function types
+    /// that need contextual inferrence
+    fn lower_arguments_for_signature(
+        &mut self,
+        signature: &FunctionSignature,
+        explicit_type_arguments: &[TypeName],
+        implicit_types: &[TypeName],
+        arguments: &[Located<Expression>],
+        span: SourceSpan,
+        context: &FunctionContext,
+        source: TypeMismatchSource,
+    ) -> PhotonResult<Vec<LoweredExpression>> {
+        // The arguments should match properly in count with what we've been provided
+        // else we wont have proper a proper lowered argument expression
+        expect_argument_count(
+            signature.parameters.len(),
+            implicit_types.len() + arguments.len(),
+            span,
+        )?;
+
+        // We shouldn't be overflowing the sigs type params else we have too many
+        // explicit and discarding silently is bad for the programmer
+        if explicit_type_arguments.len() > signature.type_parameters.len() {
+            return Err(PhotonErrorKind::error(
+                PhotonErrorKind::TooManyExplicitTypeParams {
+                    name: signature.name.clone(),
+                    max: signature.type_parameters.len(),
+                    found: explicit_type_arguments.len(),
+                },
+                span,
+            ));
+        }
+
+        // Begin substitution map of all the type params in the signature and
+        // what was explicitly provided
+        let mut substitution: TypeSubstitutionMap = signature
+            .type_parameters
+            .iter()
+            .cloned()
+            .zip(explicit_type_arguments.iter().cloned())
+            .collect();
+
+        // Infer for all of the implicit -> sig
+        for (index, actual) in implicit_types.iter().enumerate() {
+            infer_type_substitution_map(
+                &signature.parameters[index],
+                actual,
+                &mut substitution,
+                span,
+                source.clone(),
+            )?;
+        }
+
+        let offset = implicit_types.len();
+        
+        // Pre-allocate slots for all the arguments, this will come in handly later
+        let mut lowered: Vec<Option<LoweredExpression>> =
+            (0..arguments.len()).map(|_| None).collect();
+
+        // lower arguments that are not a function type that needs contextual inferrence
+        for (index, argument) in arguments.iter().enumerate() {
+            // resolve later in second pass
+            if self.function_type_needs_contextual_inferrence(argument, context)? {
+                continue;
+            }
+
+            // Lower down the expression with the expected type in this position
+            let declared = &signature.parameters[index + offset];
+            let expected = declared.substitute(&substitution);
+            let actual = if type_is_concrete(&expected) {
+                self.expect_lowered_expression_type(argument, &expected, context, source.clone())?
+            } else {
+                self.expect_lowered_expression_value(argument, context, source.clone())?
+            };
+
+            // Should return an actual value since we're plugging it into a function
+            actual.expect_value(argument.span, source.clone())?;
+
+            // Infer back from the actual value
+            infer_type_substitution_map(
+                declared,
+                &actual.value_type,
+                &mut substitution,
+                argument.span,
+                source.clone(),
+            )?;
+
+            // Fill slot
+            lowered[index] = Some(actual);
+        }
+
+        // Now that all the arguments have been substituted excluding contextual
+        // inferrence function types, all signature type parameters should be resolved!
+        for parameter in &signature.type_parameters {
+            if !substitution.contains_key(parameter) {
+                return Err(PhotonErrorKind::error(
+                    PhotonErrorKind::UnknownFunctionTypeParam {
+                        parameter: parameter.clone(),
+                        function: signature.name.clone(),
+                    },
+                    span,
+                ));
+            }
+        }
+
+        // Now that the generic parameters are known, use each concrete expected parameter type 
+        // to lower the previously deferred function references that need contextual inferrence
+        for (index, argument) in arguments.iter().enumerate() {
+            if lowered[index].is_none() {
+                let expected = signature.parameters[index + offset].substitute(&substitution);
+                let actual = self.expect_lowered_expression_type(
+                    argument,
+                    &expected,
+                    context,
+                    source.clone(),
+                )?;
+
+                actual.expect_value(argument.span, source.clone())?;
+                lowered[index] = Some(actual);
+            }
+        }
+
+        Ok(lowered.into_iter().map(Option::unwrap).collect())
+    }
+
     /// Lowers exactly one argument expression in a function context.
     ///
     /// This essentially lowers the set, expecting only one argument expression back.
@@ -2709,6 +2907,19 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 Some(repeats.as_ref()),
                 context,
                 expected_type.array_element_type(),
+            )?,
+            Expression::Name(name) => {
+                self.lower_name_expr(name, expression.span, context, Some(&expected_type))?
+            }
+            Expression::FunctionReference {
+                callee,
+                type_arguments,
+            } => self.lower_function_reference_from_expression(
+                callee,
+                type_arguments,
+                expression.span,
+                context,
+                Some(&expected_type),
             )?,
             _ => self.lower_expression(expression, context)?,
         };
@@ -2883,7 +3094,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                     TypeName::array_of(TypeName::UInt),
                 )
             }
-            Expression::Name(name) => self.lower_name_expr(name, span, context)?,
+            Expression::Name(name) => self.lower_name_expr(name, span, context, None)?,
             Expression::ArrayLiteral(elements) => {
                 self.lower_array_lit_expr(elements, None, context, None)?
             }
@@ -2903,6 +3114,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 type_arguments,
                 span,
                 context,
+                None,
             )?,
             Expression::FieldAccess { receiver, field } => {
                 self.lower_field_access(receiver, field, span, context)?
@@ -2959,6 +3171,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         name: &QualifiedName,
         span: SourceSpan,
         context: &FunctionContext,
+        expected: Option<&TypeName>,
     ) -> PhotonResult<LoweredExpression> {
         if name.is_unqualified() {
             // simple unit
@@ -2997,7 +3210,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
                 .resolve_name(name, self.module, SymbolKind::Function, span)?;
 
         if self.symbols.function(&function_name).is_some() {
-            return self.lower_function_reference(name, &[], span, context);
+            return self.lower_function_reference(name, &[], span, context, expected);
         }
 
         Err(PhotonErrorKind::error(
@@ -3015,6 +3228,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         type_arguments: &[TypeName],
         span: SourceSpan,
         context: &FunctionContext,
+        expected: Option<&TypeName>,
     ) -> PhotonResult<LoweredExpression> {
         // Must be a name
         let Expression::Name(name) = &callee.value else {
@@ -3024,7 +3238,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             ));
         };
 
-        self.lower_function_reference(name, type_arguments, span, context)
+        self.lower_function_reference(name, type_arguments, span, context, expected)
     }
 
     /// Lower the current name expression in this position as a reference
@@ -3035,6 +3249,7 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         type_arguments: &[TypeName],
         span: SourceSpan,
         context: &FunctionContext,
+        expected: Option<&TypeName>,
     ) -> PhotonResult<LoweredExpression> {
         // If the name is an unqualified local already or a unit, we cant
         // refer to a function of the same name (invalid), else a name can gain multiple meanings
@@ -3062,12 +3277,12 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             )
         })?;
 
-        // For a function reference we expect to have the same number of type arguments
-        // as the type parameters, there is no generic function interpretation here
-        if type_arguments.len() != signature.type_parameters.len() {
+        // For a function reference we expect to have at least some of type arguments
+        // as the type parameters provided, we can try infer the rest from usage
+        if type_arguments.len() > signature.type_parameters.len() {
             return Err(PhotonErrorKind::error(
                 PhotonErrorKind::FunctionReferenceTypeArgumentCount {
-                    name: qualified,
+                    name: qualified.clone(),
                     expected: signature.type_parameters.len(),
                     found: type_arguments.len(),
                 },
@@ -3081,19 +3296,60 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             .map(|arg_type| self.resolve_type(arg_type, context, span))
             .collect::<PhotonResult<Vec<_>>>()?;
 
-        // Substitute all parameters
-        let substitutions: TypeSubstitutionMap = signature
+        // Get the initial substitution map based on what we've been provided so far
+        let mut substitutions: TypeSubstitutionMap = signature
             .type_parameters
             .iter()
             .cloned()
-            .zip(concrete_arguments.iter().cloned())
+            .zip(concrete_arguments)
             .collect();
 
+        // If with substitutions in mind we are missing some type parameters,
+        // try to infer the rest
+        if substitutions.len() < signature.type_parameters.len() {
+            if let Some(expected @ TypeName::Function { .. }) = expected {
+                let declared = TypeName::Function {
+                    parameters: signature.parameters.clone(),
+                    return_type: Box::new(signature.return_type.clone()),
+                };
+
+                infer_type_substitution_map(
+                    &declared,
+                    expected,
+                    &mut substitutions,
+                    span,
+                    TypeMismatchSource::FunctionCallArguments {
+                        name: qualified.clone(),
+                    },
+                )?;
+            }
+        }
+
+        // A function value requires a concrete monomorphisation for the actual creation
+        // if we still do not have all required type parameters then error as inferrence doesn't
+        // have enough info to grab all concrete type params
+        let concrete_arguments = signature
+            .type_parameters
+            .iter()
+            .map(|parameter| substitutions.get(parameter).cloned())
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                PhotonErrorKind::error(
+                    PhotonErrorKind::FunctionReferenceTypeArgumentCount {
+                        name: qualified.clone(),
+                        expected: signature.type_parameters.len(),
+                        found: type_arguments.len(),
+                    },
+                    span,
+                )
+            })?;
+
+        // Now actually substitute all parameters for the real concrete type
         let function_type = TypeName::Function {
             parameters: signature
                 .parameters
                 .iter()
-                .map(|ty| ty.substitute(&substitutions))
+                .map(|param_type| param_type.substitute(&substitutions))
                 .collect(),
             return_type: Box::new(signature.return_type.substitute(&substitutions)),
         };
@@ -3451,8 +3707,12 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         expect_argument_count(signature.parameters.len(), arguments.len(), span)?;
 
         // lower all arguments down to their expressions
-        let arguments = self.lower_arguments(
+        let arguments = self.lower_arguments_for_signature(
+            signature,
+            &explicit_type_arguments,
+            &[],
             arguments,
+            span,
             context,
             TypeMismatchSource::FunctionCallArguments {
                 name: resolved_name.clone(),
@@ -3562,9 +3822,21 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
         expect_argument_count(parameters.len(), arguments.len(), span)?;
 
         // Lower each argument with the expected type
-        let values =
-            self.lower_arguments(arguments, context, TypeMismatchSource::IndirectCallArgument)?;
-            
+        let values = arguments
+            .iter()
+            .zip(parameters)
+            .map(|(argument, expected)| {
+                let actual = self.expect_lowered_expression_type(
+                    argument,
+                    expected,
+                    context,
+                    TypeMismatchSource::IndirectCallArgument,
+                )?;
+                actual.expect_value(argument.span, TypeMismatchSource::IndirectCallArgument)?;
+                Ok(actual)
+            })
+            .collect::<PhotonResult<Vec<_>>>()?;
+
         for (expected, actual) in parameters.iter().zip(values.iter()) {
             expect_type_accepts(
                 expected,
@@ -3732,19 +4004,24 @@ impl<'symbols, 'source_map, 'module, 'monomorphs>
             span,
         )?;
 
-        let arguments = self.lower_arguments(
-            arguments,
-            context,
-            TypeMismatchSource::FunctionCallArguments {
-                name: method_name.clone(),
-            },
-        )?;
-
         // get explicit type arguments to this method call
         let explicit_type_arguments = type_arguments
             .iter()
             .map(|explicit_type| self.resolve_type(explicit_type, context, span))
             .collect::<PhotonResult<Vec<_>>>()?;
+
+        // lower arguments
+        let arguments = self.lower_arguments_for_signature(
+            signature,
+            &explicit_type_arguments,
+            &[receiver.value_type.clone()],
+            arguments,
+            span,
+            context,
+            TypeMismatchSource::FunctionCallArguments {
+                name: method_name.clone(),
+            },
+        )?;
 
         // actual types of all the method params
         let mut actual_types = Vec::with_capacity(arguments.len() + 1);
@@ -4450,6 +4727,35 @@ fn infer_type_substitution_map(
             },
             span,
         )),
+    }
+}
+
+/// Whether this type is a fully concrete type such that
+/// none of the parameters to the type (or any sub-type) are generic
+fn type_is_concrete(concrete_type: &TypeName) -> bool {
+    match concrete_type {
+        TypeName::GenericParameter(_) => false,
+        TypeName::Applied {
+            constructor,
+            arguments,
+        } => type_is_concrete(constructor) && arguments.iter().all(type_is_concrete),
+        TypeName::Function {
+            parameters,
+            return_type,
+        } => parameters.iter().all(type_is_concrete) && type_is_concrete(return_type),
+
+        // since other container types may be added in the future,
+        // we explicitly true here so that in the future new types dont explode
+        TypeName::Int
+        | TypeName::UInt
+        | TypeName::Float
+        | TypeName::Bool
+        | TypeName::Array
+        | TypeName::Tag
+        | TypeName::Unit
+        | TypeName::Void
+        | TypeName::Any
+        | TypeName::Object(_) => true,
     }
 }
 
