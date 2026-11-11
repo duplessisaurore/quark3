@@ -90,6 +90,7 @@ pub enum TokenKind {
     ShiftRight,
     BitwiseAnd,
     BitwiseOr,
+    Pipeline,
     BitwiseXor,
     LogicalAnd,
     LogicalOr,
@@ -320,7 +321,15 @@ impl<'src> Lexer<'src> {
         }
 
         // And if we arent in a grouping-type expression, then push newline
-        if self.expression_grouping_depth == 0 {
+        //
+        // Another special case is if we are after a pipeline, we should not push a newline
+        // since this would be the actual thing we are pipelining into
+        let after_pipeline = self
+            .tokens
+            .last()
+            .is_some_and(|token| token.value == TokenKind::Pipeline);
+        
+        if self.expression_grouping_depth == 0 && !after_pipeline {
             self.push_token(TokenKind::Newline, start);
         }
 
@@ -793,6 +802,7 @@ impl<'src> Lexer<'src> {
             (">>", TokenKind::ShiftRight),
             ("&&", TokenKind::LogicalAnd),
             ("||", TokenKind::LogicalOr),
+            ("|>", TokenKind::Pipeline),
             ("++", TokenKind::PlusPlus),
             ("--", TokenKind::MinusMinus),
             ("+=", TokenKind::PlusAssign),
@@ -1033,6 +1043,7 @@ impl TokenKind {
             Self::ShiftRight => ">>",
             Self::BitwiseAnd => "&",
             Self::BitwiseOr => "|",
+            Self::Pipeline => "|>",
             Self::BitwiseXor => "^",
             Self::LogicalAnd => "&&",
             Self::LogicalOr => "||",

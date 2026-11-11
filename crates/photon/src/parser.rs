@@ -1359,7 +1359,7 @@ impl<'tokens> Parser<'tokens> {
     /// Parses a conditional binary operator (condition ? true_expr : false_expr)
     fn parse_conditional(&mut self) -> PhotonResult<Located<Expression>> {
         // condition
-        let condition = self.parse_logical_or()?;
+        let condition = self.parse_pipeline()?;
 
         // ?
         if !self.eat(&TokenKind::Question) {
@@ -1384,6 +1384,80 @@ impl<'tokens> Parser<'tokens> {
             },
             (start..end).into(),
         ))
+    }
+
+    /// Parses a pipeline operator (left |> right)
+    fn parse_pipeline(&mut self) -> PhotonResult<Located<Expression>> {
+        // left side
+        let mut left = self.parse_logical_or()?;
+
+        loop {
+            // We may have multiple newlines following our left side before the pipeline...
+            let mut newlines = 0;
+            while self.check_nth(newlines, &TokenKind::Newline) {
+                newlines += 1;
+            }
+
+            // potential right side after
+            if !self.check_nth(newlines, &TokenKind::Pipeline) {
+                break;
+            }
+
+            self.skip_newlines();
+            self.expect(&TokenKind::Pipeline)?;
+
+            // parse one rhs callable expression
+            let right = self.parse_postfix()?;
+            let span: SourceSpan = (left.span.start..right.span.end).into();
+
+            // we need to inject our lhs into the call's arguments now
+            // as per pipeline expects
+            let call = match right.value {
+                Expression::Call {
+                    callee,
+                    type_arguments,
+                    mut arguments,
+                } => {
+                    arguments.insert(0, left);
+                    Expression::Call {
+                        callee,
+                        type_arguments,
+                        arguments,
+                    }
+                }
+                Expression::FunctionReference {
+                    callee,
+                    type_arguments,
+                } => Expression::Call {
+                    callee,
+                    type_arguments,
+                    arguments: vec![left],
+                },
+                Expression::MethodCall {
+                    receiver,
+                    method,
+                    type_arguments,
+                    mut arguments,
+                } => {
+                    arguments.insert(0, left);
+                    Expression::MethodCall {
+                        receiver,
+                        method,
+                        type_arguments,
+                        arguments,
+                    }
+                }
+                other => Expression::Call {
+                    callee: Box::new(Located::new(other, right.span)),
+                    type_arguments: Vec::new(),
+                    arguments: vec![left],
+                },
+            };
+
+            left = Located::new(call, span);
+        }
+
+        Ok(left)
     }
 
     /// Parses a logical or binary operator
